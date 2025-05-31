@@ -1,0 +1,125 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "region": "Москва",
+        "region_code": 77,
+        "center": [37.6176, 55.7558]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [37.6176, 55.7558]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "region": "Санкт-Петербург",
+        "region_code": 78,
+        "center": [30.3351, 59.9311]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [30.3351, 59.9311]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "region": "Казань",
+        "region_code": 16,
+        "center": [49.1221, 55.7887]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [49.1221, 55.7887]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "region": "Владивосток",
+        "region_code": 25,
+        "center": [131.8873, 43.1198]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [131.8873, 43.1198]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "region": "Новосибирск",
+        "region_code": 54,
+        "center": [82.9346, 55.0084]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [82.9346, 55.0084]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "region": "Екатеринбург",
+        "region_code": 66,
+        "center": [60.6122, 56.8431]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [60.6122, 56.8431]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "region": "Нижний Новгород",
+        "region_code": 52,
+        "center": [44.0020, 56.2965]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [44.0020, 56.2965]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "region": "Челябинск",
+        "region_code": 74,
+        "center": [61.4291, 55.1644]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [61.4291, 55.1644]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "region": "Самара",
+        "region_code": 63,
+        "center": [50.1155, 53.1952]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [50.1155, 53.1952]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "region": "Ростов-на-Дону",
+        "region_code": 61,
+        "center": [39.7015, 47.2357]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [39.7015, 47.2357]
+      }
+    }
+  ]
+} 
