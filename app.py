@@ -24,6 +24,7 @@ from src.agents.sql_agent import get_sql_agent
 from src.agents.visualize_tool import get_visualization_analyzer
 from src.visualization.charts import get_chart_creator
 from src.visualization.maps import get_map_creator
+from src.utils.pdf_export import generate_qa_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,16 @@ def render_sidebar():
         
         st.markdown("---")
         
+        # Экспорт истории в PDF
+        st.header("📄 Экспорт")
+        if len(st.session_state.messages) > 0:
+            if st.button("📋 Экспорт всей истории в PDF", use_container_width=True):
+                export_full_history_to_pdf()
+        else:
+            st.info("История пуста")
+        
+        st.markdown("---")
+        
         st.header("📊 Доступные данные")
         st.markdown("""
         **Таблицы:**
@@ -116,7 +127,7 @@ def render_chat_interface():
     st.header("💬 Задайте вопрос о данных")
     
     # Отображение истории сообщений
-    for message in st.session_state.messages:
+    for i, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             
@@ -128,10 +139,158 @@ def render_chat_interface():
             if "visualization" in message:
                 st.subheader("📈 Визуализация")
                 render_visualization(message["visualization"])
+            
+            # Кнопка экспорта в PDF для ответов с данными
+            if (message["role"] == "assistant" and 
+                ("data" in message or "visualization" in message)):
+                
+                # Получаем предыдущий вопрос пользователя
+                user_question = ""
+                if i > 0 and st.session_state.messages[i-1]["role"] == "user":
+                    user_question = st.session_state.messages[i-1]["content"]
+                
+                col1, col2, col3 = st.columns([1, 1, 4])
+                with col1:
+                    if st.button(f"📄 Экспорт PDF", key=f"export_pdf_{i}"):
+                        export_to_pdf(
+                            question=user_question,
+                            answer=message["content"],
+                            data=message.get("data"),
+                            sql_query=message.get("sql_query"),
+                            visualization_config=message.get("visualization"),
+                            message_index=i
+                        )
     
     # Поле ввода для нового вопроса
     if prompt := st.chat_input("Введите ваш вопрос о данных индексов..."):
         process_user_input(prompt)
+
+
+def export_full_history_to_pdf():
+    """Экспорт всей истории чата в PDF."""
+    try:
+        if not st.session_state.messages:
+            st.warning("История чата пуста")
+            return
+        
+        with st.spinner("Создание полного PDF отчета..."):
+            # Собираем все Q&A пары
+            qa_pairs = []
+            current_question = ""
+            
+            for message in st.session_state.messages:
+                if message["role"] == "user":
+                    current_question = message["content"]
+                elif message["role"] == "assistant" and current_question:
+                    qa_pairs.append({
+                        "question": current_question,
+                        "answer": message["content"],
+                        "data": message.get("data"),
+                        "sql_query": message.get("sql_query"),
+                        "visualization": message.get("visualization")
+                    })
+                    current_question = ""
+            
+            if not qa_pairs:
+                st.warning("В истории нет завершенных вопросов и ответов")
+                return
+            
+            # Создаем комбинированный ответ
+            combined_answer = "Полная история анализа данных:\n\n"
+            all_data = []
+            
+            for i, pair in enumerate(qa_pairs, 1):
+                combined_answer += f"{i}. {pair['answer']}\n\n"
+                if pair['data'] is not None and not pair['data'].empty:
+                    all_data.append(pair['data'])
+            
+            # Объединяем все данные если есть
+            combined_data = None
+            if all_data:
+                try:
+                    combined_data = pd.concat(all_data, ignore_index=True)
+                except:
+                    combined_data = all_data[0]  # Берем первые данные если объединение не удалось
+            
+            # Генерируем PDF
+            pdf_bytes = generate_qa_pdf(
+                question="Полная история анализа",
+                answer=combined_answer,
+                data=combined_data,
+                sql_query=None,
+                visualization_config=None
+            )
+            
+            # Создаем имя файла
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"sber_index_full_history_{timestamp}.pdf"
+            
+            # Кнопка скачивания
+            st.download_button(
+                label="⬇️ Скачать полный PDF отчет",
+                data=pdf_bytes,
+                file_name=filename,
+                mime="application/pdf",
+                key=f"download_full_pdf_{timestamp}"
+            )
+            
+            st.success(f"✅ Полный PDF отчет готов! Включает {len(qa_pairs)} вопросов и ответов.")
+            
+    except Exception as e:
+        logger.error(f"Ошибка экспорта полной истории в PDF: {e}")
+        st.error(f"Ошибка создания полного PDF отчета: {e}")
+
+
+def export_to_pdf(
+    question: str,
+    answer: str,
+    data: Optional[pd.DataFrame] = None,
+    sql_query: Optional[str] = None,
+    visualization_config: Optional[Dict[str, Any]] = None,
+    message_index: int = 0
+):
+    """
+    Экспорт вопроса и ответа в PDF.
+    
+    Args:
+        question: Вопрос пользователя
+        answer: Ответ системы
+        data: Данные таблицы
+        sql_query: SQL запрос
+        visualization_config: Конфигурация визуализации
+        message_index: Индекс сообщения для уникальности
+    """
+    try:
+        with st.spinner("Создание PDF отчета..."):
+            # Генерируем PDF
+            pdf_bytes = generate_qa_pdf(
+                question=question,
+                answer=answer,
+                data=data,
+                sql_query=sql_query,
+                visualization_config=visualization_config
+            )
+            
+            # Создаем имя файла
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"sber_index_report_{timestamp}.pdf"
+            
+            # Кнопка скачивания
+            st.download_button(
+                label="⬇️ Скачать PDF отчет",
+                data=pdf_bytes,
+                file_name=filename,
+                mime="application/pdf",
+                key=f"download_pdf_{message_index}_{timestamp}"
+            )
+            
+            st.success("✅ PDF отчет готов к скачиванию!")
+            
+    except Exception as e:
+        logger.error(f"Ошибка экспорта в PDF: {e}")
+        st.error(f"Ошибка создания PDF отчета: {e}")
 
 
 def process_user_input(user_input: str):
