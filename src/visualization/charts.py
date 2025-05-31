@@ -52,8 +52,23 @@ class ChartCreator:
             if not x_col or not y_col:
                 raise ValueError("Не указаны колонки для осей X и Y")
             
+            # Копируем данные для модификации
+            df_copy = df.copy()
+            
+            # Обработка временных данных - если месяц в формате YYYY-MM, преобразуем
+            if x_col and 'month' in x_col.lower():
+                try:
+                    # Пытаемся преобразовать колонку с месяцами в datetime
+                    df_copy[x_col] = pd.to_datetime(df_copy[x_col], format='%Y-%m', errors='coerce')
+                    # Если не получилось, попробуем другие форматы
+                    if df_copy[x_col].isna().all():
+                        df_copy[x_col] = pd.to_datetime(df_copy[x_col], errors='coerce')
+                except:
+                    # Если преобразование не удалось, оставляем как есть
+                    pass
+            
             fig = px.line(
-                df,
+                df_copy,
                 x=x_col,
                 y=y_col,
                 color=color_col,
@@ -61,9 +76,13 @@ class ChartCreator:
                 **self.default_config
             )
             
+            # Улучшенные названия осей
+            x_title = self._get_friendly_column_name(x_col)
+            y_title = self._get_friendly_column_name(y_col)
+            
             # Настройка осей
-            fig.update_xaxes(title_text=x_col)
-            fig.update_yaxes(title_text=y_col)
+            fig.update_xaxes(title_text=x_title)
+            fig.update_yaxes(title_text=y_title)
             
             # Настройка макета
             fig.update_layout(
@@ -77,6 +96,41 @@ class ChartCreator:
         except Exception as e:
             logger.error(f"Ошибка создания линейного графика: {e}")
             return self._create_error_chart(str(e))
+    
+    def _get_friendly_column_name(self, column_name: str) -> str:
+        """
+        Преобразование технических названий колонок в понятные пользователю.
+        
+        Args:
+            column_name: Техническое название колонки
+            
+        Returns:
+            Понятное название для отображения
+        """
+        if not column_name:
+            return ""
+        
+        friendly_names = {
+            'consumer_spending': 'Потребительские расходы',
+            'housing_index': 'Индекс жилья',
+            'transport_accessibility': 'Транспортная доступность',
+            'market_accessibility': 'Доступность рынков',
+            'month': 'Месяц',
+            'year': 'Год',
+            'region': 'Регион',
+            'population': 'Население',
+            'age_median': 'Медианный возраст',
+            'income_median': 'Медианный доход',
+            'unemployment_rate': 'Уровень безработицы',
+            'education_index': 'Индекс образования',
+            'transport_score': 'Транспортный индекс',
+            'public_transport_coverage': 'Покрытие общественным транспортом',
+            'road_quality_index': 'Индекс качества дорог',
+            'airport_accessibility': 'Доступность аэропортов',
+            'railway_connectivity': 'Железнодорожная связность'
+        }
+        
+        return friendly_names.get(column_name, column_name)
     
     def create_bar_chart(self, config: Dict[str, Any]) -> go.Figure:
         """
@@ -110,9 +164,13 @@ class ChartCreator:
                 **self.default_config
             )
             
+            # Улучшенные названия осей
+            x_title = self._get_friendly_column_name(x_col)
+            y_title = self._get_friendly_column_name(y_col)
+            
             # Настройка осей
-            fig.update_xaxes(title_text=x_col, tickangle=45)
-            fig.update_yaxes(title_text=y_col)
+            fig.update_xaxes(title_text=x_title, tickangle=45)
+            fig.update_yaxes(title_text=y_title)
             
             # Добавляем значения на столбцы
             fig.update_traces(texttemplate='%{y}', textposition='outside')
@@ -161,9 +219,13 @@ class ChartCreator:
                 px.scatter(df, x=x_col, y=y_col, trendline="ols").data[1:]
             )
             
+            # Улучшенные названия осей
+            x_title = self._get_friendly_column_name(x_col)
+            y_title = self._get_friendly_column_name(y_col)
+            
             # Настройка осей
-            fig.update_xaxes(title_text=x_col)
-            fig.update_yaxes(title_text=y_col)
+            fig.update_xaxes(title_text=x_title)
+            fig.update_yaxes(title_text=y_title)
             
             logger.info(f"Создана точечная диаграмма: {title}")
             return fig

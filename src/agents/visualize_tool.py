@@ -217,15 +217,29 @@ class VisualizationAnalyzer:
                     keyword in col.lower() for keyword in ['month', 'date', 'time', 'месяц', 'год']
                 )]
                 config["x_column"] = time_cols[0] if time_cols else text_cols[0] if text_cols else None
-                config["y_column"] = numeric_cols[0] if numeric_cols else None
+                
+                # Для y_column исключаем id, year и другие служебные колонки
+                value_cols = [col for col in numeric_cols if not any(
+                    keyword in col.lower() for keyword in ['year', 'id', 'code', '_id', 'год']
+                )]
+                config["y_column"] = value_cols[0] if value_cols else numeric_cols[0] if numeric_cols else None
                 
             elif chart_type == "bar":
                 config["x_column"] = text_cols[0] if text_cols else None
-                config["y_column"] = numeric_cols[0] if numeric_cols else None
+                
+                # Для bar chart также исключаем служебные колонки
+                value_cols = [col for col in numeric_cols if not any(
+                    keyword in col.lower() for keyword in ['year', 'id', 'code', '_id', 'год']
+                )]
+                config["y_column"] = value_cols[0] if value_cols else numeric_cols[0] if numeric_cols else None
                 
             elif chart_type == "scatter":
-                config["x_column"] = numeric_cols[0] if len(numeric_cols) > 0 else None
-                config["y_column"] = numeric_cols[1] if len(numeric_cols) > 1 else None
+                # Для scatter исключаем служебные колонки
+                value_cols = [col for col in numeric_cols if not any(
+                    keyword in col.lower() for keyword in ['year', 'id', 'code', '_id', 'год']
+                )]
+                config["x_column"] = value_cols[0] if len(value_cols) > 0 else numeric_cols[0] if len(numeric_cols) > 0 else None
+                config["y_column"] = value_cols[1] if len(value_cols) > 1 else numeric_cols[1] if len(numeric_cols) > 1 else None
                 config["color_column"] = text_cols[0] if text_cols else None
                 
             elif chart_type == "map":
@@ -234,7 +248,12 @@ class VisualizationAnalyzer:
                     keyword in col.lower() for keyword in ['region', 'city', 'регион', 'город']
                 )]
                 config["location_column"] = geo_cols[0] if geo_cols else None
-                config["value_column"] = numeric_cols[0] if numeric_cols else None
+                
+                # Для значений также исключаем служебные колонки
+                value_cols = [col for col in numeric_cols if not any(
+                    keyword in col.lower() for keyword in ['year', 'id', 'code', '_id', 'год']
+                )]
+                config["value_column"] = value_cols[0] if value_cols else numeric_cols[0] if numeric_cols else None
             
             return config
             
