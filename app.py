@@ -17,7 +17,8 @@ from src.config.settings import (
     APP_TITLE, 
     APP_SUBTITLE, 
     DEMO_QUESTIONS,
-    OPENAI_API_KEY
+    OPENAI_API_KEY,
+    create_streamlit_config
 )
 from src.data.database import initialize_database, get_database_manager
 from src.agents.sql_agent import get_sql_agent
@@ -33,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 def setup_page_config():
     """Настройка конфигурации страницы Streamlit."""
+    # Создаем конфигурацию темы на основе переменной окружения
+    create_streamlit_config()
+    
     st.set_page_config(
         page_title="SberIndexNavigator",
         page_icon="🧭",

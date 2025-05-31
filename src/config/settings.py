@@ -7,9 +7,12 @@ import os
 import logging
 from typing import Optional
 from dotenv import load_dotenv
+from pathlib import Path
 
 # Загружаем переменные окружения из .env файла
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # Логирование
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -184,6 +187,42 @@ COLOR_PALETTE = [
 MAX_RETRIES = 3
 API_TIMEOUT = 30
 QUERY_TIMEOUT = 10
+
+# Функция для создания конфигурации темы
+def create_streamlit_config() -> None:
+    """
+    Создает файл .streamlit/config.toml на основе переменной STREAMLIT_THEME_BASE.
+    """
+    # Создаем директорию .streamlit если её нет
+    config_dir = Path(".streamlit")
+    config_dir.mkdir(exist_ok=True)
+    
+    config_file = config_dir / "config.toml"
+    
+    # Определяем тему на основе STREAMLIT_THEME_BASE
+    if STREAMLIT_THEME_BASE.lower() == "dark":
+        theme_config = """[theme]
+base = "dark"
+primaryColor = "#00C851"
+backgroundColor = "#0F1419" 
+secondaryBackgroundColor = "#1E2328"
+textColor = "#FAFAFA"
+font = "sans serif"
+"""
+    else:  # light theme (по умолчанию)
+        theme_config = """[theme]
+base = "light"
+primaryColor = "#1f77b4"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+font = "sans serif"
+"""
+    
+    # Записываем конфигурацию только если файл не существует или отличается
+    if not config_file.exists() or config_file.read_text() != theme_config:
+        config_file.write_text(theme_config)
+        logger.info(f"Создан файл конфигурации темы: {config_file}")
 
 # Валидация конфигурации
 def validate_config() -> bool:
