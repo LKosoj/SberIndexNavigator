@@ -48,6 +48,10 @@ def initialize_session_state():
     
     if "agents_initialized" not in st.session_state:
         st.session_state.agents_initialized = False
+    
+    # Добавляем флаг для предотвращения дублирования обработки
+    if "processing_request" not in st.session_state:
+        st.session_state.processing_request = False
 
 
 @st.cache_resource
@@ -76,6 +80,7 @@ def render_sidebar():
         
         for i, question in enumerate(DEMO_QUESTIONS):
             if st.button(question, key=f"demo_q_{i}", use_container_width=True):
+                # Устанавливаем флаг для обработки в основном интерфейсе
                 st.session_state.demo_question = question
         
         st.markdown("---")
@@ -124,11 +129,6 @@ def render_chat_interface():
                 st.subheader("📈 Визуализация")
                 render_visualization(message["visualization"])
     
-    # Обработка демо-вопроса из sidebar
-    if "demo_question" in st.session_state:
-        process_user_input(st.session_state.demo_question)
-        del st.session_state.demo_question
-    
     # Поле ввода для нового вопроса
     if prompt := st.chat_input("Введите ваш вопрос о данных индексов..."):
         process_user_input(prompt)
@@ -141,72 +141,82 @@ def process_user_input(user_input: str):
     Args:
         user_input: Вопрос пользователя
     """
-    # Добавляем сообщение пользователя
-    st.session_state.messages.append({
-        "role": "user", 
-        "content": user_input
-    })
+    # Предотвращаем дублирование обработки
+    if st.session_state.processing_request:
+        return
+        
+    st.session_state.processing_request = True
     
-    with st.chat_message("user"):
-        st.markdown(user_input)
-    
-    # Обработка запроса
-    with st.chat_message("assistant"):
-        with st.spinner("Анализирую ваш вопрос..."):
-            try:
-                # Получаем SQL-агент
-                sql_agent = get_sql_agent()
-                
-                # Анализируем вопрос
-                result = sql_agent.analyze_question(user_input)
-                
-                if result["success"]:
-                    # Отображаем результат
-                    st.markdown(f"**Анализ:** {user_input}")
+    try:
+        # Добавляем сообщение пользователя
+        st.session_state.messages.append({
+            "role": "user", 
+            "content": user_input
+        })
+        
+        with st.chat_message("user"):
+            st.markdown(user_input)
+        
+        # Обработка запроса
+        with st.chat_message("assistant"):
+            with st.spinner("Анализирую ваш вопрос..."):
+                try:
+                    # Получаем SQL-агент
+                    sql_agent = get_sql_agent()
                     
-                    if not result["data"].empty:
-                        st.subheader("📊 Найденные данные")
-                        st.dataframe(result["data"], use_container_width=True)
+                    # Анализируем вопрос
+                    result = sql_agent.analyze_question(user_input)
+                    
+                    if result["success"]:
+                        # Отображаем результат
+                        st.markdown(f"**Анализ:** {user_input}")
                         
-                        # Создаем визуализацию
-                        visualization_config = create_visualization(result["data"], user_input)
-                        
-                        if visualization_config:
-                            st.subheader("📈 Визуализация")
-                            render_visualization(visualization_config)
-                        
-                        # Сохраняем в историю
-                        assistant_message = {
-                            "role": "assistant",
-                            "content": f"**Анализ:** {user_input}",
-                            "data": result["data"],
-                            "sql_query": result["sql_query"]
-                        }
-                        
-                        if visualization_config:
-                            assistant_message["visualization"] = visualization_config
-                        
-                        st.session_state.messages.append(assistant_message)
+                        if not result["data"].empty:
+                            st.subheader("📊 Найденные данные")
+                            st.dataframe(result["data"], use_container_width=True)
+                            
+                            # Создаем визуализацию
+                            visualization_config = create_visualization(result["data"], user_input)
+                            
+                            if visualization_config:
+                                st.subheader("📈 Визуализация")
+                                render_visualization(visualization_config)
+                            
+                            # Сохраняем в историю
+                            assistant_message = {
+                                "role": "assistant",
+                                "content": f"**Анализ:** {user_input}",
+                                "data": result["data"],
+                                "sql_query": result["sql_query"]
+                            }
+                            
+                            if visualization_config:
+                                assistant_message["visualization"] = visualization_config
+                            
+                            st.session_state.messages.append(assistant_message)
+                        else:
+                            st.warning("Данные не найдены. Попробуйте переформулировать вопрос.")
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": "Данные не найдены. Попробуйте переформулировать вопрос."
+                            })
                     else:
-                        st.warning("Данные не найдены. Попробуйте переформулировать вопрос.")
+                        st.error(f"Ошибка анализа: {result['error']}")
                         st.session_state.messages.append({
                             "role": "assistant",
-                            "content": "Данные не найдены. Попробуйте переформулировать вопрос."
+                            "content": f"Ошибка анализа: {result['error']}"
                         })
-                else:
-                    st.error(f"Ошибка анализа: {result['error']}")
+                        
+                except Exception as e:
+                    logger.error(f"Ошибка обработки запроса: {e}")
+                    st.error(f"Произошла ошибка: {e}")
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": f"Ошибка анализа: {result['error']}"
+                        "content": f"Произошла ошибка: {e}"
                     })
-                    
-            except Exception as e:
-                logger.error(f"Ошибка обработки запроса: {e}")
-                st.error(f"Произошла ошибка: {e}")
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": f"Произошла ошибка: {e}"
-                })
+    finally:
+        # Сбрасываем флаг обработки
+        st.session_state.processing_request = False
 
 
 def create_visualization(data: pd.DataFrame, question: str) -> Optional[Dict[str, Any]]:
@@ -272,6 +282,59 @@ def render_header():
     st.markdown("---")
 
 
+def check_and_process_demo_question():
+    """Проверка и обработка демо-вопроса в конце выполнения."""
+    if "demo_question" in st.session_state:
+        demo_question = st.session_state.demo_question
+        del st.session_state.demo_question
+        
+        # Добавляем вопрос пользователя в историю
+        st.session_state.messages.append({
+            "role": "user", 
+            "content": demo_question
+        })
+        
+        # Обрабатываем вопрос
+        try:
+            # Получаем SQL-агент
+            sql_agent = get_sql_agent()
+            
+            # Анализируем вопрос
+            result = sql_agent.analyze_question(demo_question)
+            
+            if result["success"] and not result["data"].empty:
+                # Создаем визуализацию
+                visualization_config = create_visualization(result["data"], demo_question)
+                
+                # Сохраняем в историю
+                assistant_message = {
+                    "role": "assistant",
+                    "content": f"**Анализ:** {demo_question}",
+                    "data": result["data"],
+                    "sql_query": result["sql_query"]
+                }
+                
+                if visualization_config:
+                    assistant_message["visualization"] = visualization_config
+                
+                st.session_state.messages.append(assistant_message)
+            else:
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": "Данные не найдены. Попробуйте переформулировать вопрос."
+                })
+                
+        except Exception as e:
+            logger.error(f"Ошибка обработки демо-запроса: {e}")
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": f"Произошла ошибка: {e}"
+            })
+        
+        # Принудительно обновляем интерфейс
+        st.rerun()
+
+
 def main():
     """Главная функция приложения."""
     setup_page_config()
@@ -295,9 +358,11 @@ def main():
     col1, col2 = st.columns([3, 1])
     
     with col1:
+        # Основной чат-интерфейс
         render_chat_interface()
     
     with col2:
+        # Сайдбар с кнопками
         render_sidebar()
     
     # Футер
@@ -306,6 +371,9 @@ def main():
         "🏆 **SberIndexNavigator** - Демонстрация возможностей "
         "комбинации 'Вопрос → Аналитический ответ → Автовизуализация'"
     )
+    
+    # В самом конце проверяем и обрабатываем демо-вопросы
+    check_and_process_demo_question()
 
 
 if __name__ == "__main__":

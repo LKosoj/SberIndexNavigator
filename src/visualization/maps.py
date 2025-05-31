@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import json
 from pathlib import Path
+import time
 
 from src.config.settings import (
     CHART_HEIGHT,
@@ -316,7 +317,11 @@ class MapCreator:
                 return
             
             fig = map_methods[map_type](config)
-            st.plotly_chart(fig, use_container_width=True)
+            
+            # Генерируем уникальный ключ для карты
+            unique_key = f"map_{map_type}_{int(time.time() * 1000000)}"
+            
+            st.plotly_chart(fig, use_container_width=True, key=unique_key)
             
         except Exception as e:
             logger.error(f"Ошибка отображения карты: {e}")

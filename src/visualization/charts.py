@@ -10,6 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+import time
 
 from src.config.settings import (
     CHART_HEIGHT,
@@ -342,7 +343,11 @@ class ChartCreator:
                 return
             
             fig = chart_methods[chart_type](config)
-            st.plotly_chart(fig, use_container_width=True)
+            
+            # Генерируем уникальный ключ на основе типа и времени
+            unique_key = f"chart_{chart_type}_{int(time.time() * 1000000)}"
+            
+            st.plotly_chart(fig, use_container_width=True, key=unique_key)
             
         except Exception as e:
             logger.error(f"Ошибка отображения графика: {e}")

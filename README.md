@@ -57,6 +57,31 @@ SberIndexNavigator/
 
 ## 🚀 Запуск
 
+### Быстрый запуск (рекомендуется)
+
+**macOS/Linux:**
+```bash
+./start_app.sh
+```
+
+**Windows:**
+```bash
+start_app.bat
+```
+
+### Остановка приложения
+
+**macOS/Linux:**
+```bash
+./stop_app.sh
+```
+
+**Windows:**
+```bash
+Ctrl+C в окне терминала
+```
+
+### Ручной запуск
 ```bash
 streamlit run app.py
 ```

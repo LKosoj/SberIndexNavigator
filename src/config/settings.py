@@ -30,7 +30,7 @@ STREAMLIT_SERVER_PORT = int(os.getenv("STREAMLIT_SERVER_PORT", "8501"))
 STREAMLIT_THEME_BASE = os.getenv("STREAMLIT_THEME_BASE", "light")
 
 # Cache Settings
-CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))  # 1 час в секундах
+CACHE_TTL = int(os.getenv("CACHE_TTL", "3600").split('#')[0].strip())  # 1 час в секундах
 
 # Приложение
 APP_TITLE = "🧭 SberIndexNavigator"

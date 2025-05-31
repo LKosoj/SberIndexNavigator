@@ -6,13 +6,16 @@ SQL-агент для генерации и выполнения SQL-запро�
 import logging
 from typing import Dict, Any, Optional, List
 import pandas as pd
-from langchain.agents import create_sql_agent
-from langchain.agents.agent_toolkits import SQLDatabaseToolkit
-from langchain.sql_database import SQLDatabase
+from langchain_community.agent_toolkits.sql.base import create_sql_agent
+from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
+from langchain_community.utilities import SQLDatabase
 from langchain_openai import ChatOpenAI
 from langchain.agents.agent_types import AgentType
 from langchain.schema import AgentAction, AgentFinish
 import duckdb
+import tempfile
+import shutil
+import os
 
 from src.config.settings import (
     OPENAI_API_KEY, 
@@ -56,13 +59,18 @@ class SqlAgent:
             
             self.llm = ChatOpenAI(**llm_kwargs)
             
-            # Создание подключения к базе данных для LangChain
-            # Используем временное подключение для создания SQLDatabase
-            temp_conn = duckdb.connect(self.db_manager.database_path)
+            # Создание SQLDatabase объекта для LangChain
+            # Используем in-memory DuckDB для избежания конфликтов
+            # Скопируем данные из основной базы
             
-            # Создаем SQLDatabase объект
-            db_uri = f"duckdb:///{self.db_manager.database_path}"
+            # Создаем временную копию базы данных для LangChain
+            temp_db = tempfile.mktemp(suffix='.db')
+            shutil.copy2(self.db_manager.database_path, temp_db)
+            
+            # Создаем подключение для LangChain
+            db_uri = f"duckdb:///{temp_db}"
             self.sql_db = SQLDatabase.from_uri(db_uri)
+            self.temp_db_path = temp_db
             
             # Создание toolkit
             toolkit = SQLDatabaseToolkit(db=self.sql_db, llm=self.llm)
@@ -208,6 +216,14 @@ class SqlAgent:
         """
         from src.config.settings import DEMO_QUESTIONS
         return DEMO_QUESTIONS
+
+    def __del__(self):
+        """Очистка временных файлов при удалении объекта."""
+        if hasattr(self, 'temp_db_path') and os.path.exists(self.temp_db_path):
+            try:
+                os.unlink(self.temp_db_path)
+            except:
+                pass
 
 
 # Singleton instance для использования в приложении

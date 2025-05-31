@@ -33,25 +33,26 @@ class VisualizeTool(BaseTool):
     name: str = "visualize_tool"
     description: str = "Определяет оптимальный тип визуализации для данных"
     args_schema: type[BaseModel] = VisualizationInput
+    llm: Optional[ChatOpenAI] = None
+    
+    class Config:
+        arbitrary_types_allowed = True
     
     def __init__(self):
         """Инициализация инструмента визуализации."""
         super().__init__()
-        # Инициализируем LLM только если есть API ключ
-        if OPENAI_API_KEY and OPENAI_API_KEY != "your_openai_api_key_here":
-            llm_kwargs = {
-                "model": OPENAI_MODEL,
-                "temperature": OPENAI_TEMPERATURE,
-                "openai_api_key": OPENAI_API_KEY
-            }
-            
-            # Добавляем base_url если он задан
-            if OPENAI_BASE_URL:
-                llm_kwargs["base_url"] = OPENAI_BASE_URL
-            
-            self.llm = ChatOpenAI(**llm_kwargs)
-        else:
-            self.llm = None
+        
+        llm_kwargs = {
+            "model": OPENAI_MODEL,
+            "temperature": OPENAI_TEMPERATURE,
+            "openai_api_key": OPENAI_API_KEY
+        }
+        
+        # Добавляем base_url если он задан
+        if OPENAI_BASE_URL:
+            llm_kwargs["base_url"] = OPENAI_BASE_URL
+        
+        self.llm = ChatOpenAI(**llm_kwargs)
     
     def _run(self, data: str, question: str) -> str:
         """
