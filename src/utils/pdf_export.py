@@ -29,11 +29,21 @@ logger = logging.getLogger(__name__)
 def register_cyrillic_fonts():
     """Регистрация шрифтов с поддержкой кириллицы."""
     try:
+        # Проверяем, уже ли зарегистрированы наши шрифты
+        registered_font_names = [f.fontName for f in pdfmetrics._fonts.values()]
+        if 'CyrillicSans' in registered_font_names:
+            logger.info("Шрифты уже зарегистрированы")
+            return {
+                'sans': 'CyrillicSans',
+                'serif': 'CyrillicSerif' if 'CyrillicSerif' in registered_font_names else 'Times-Roman',
+                'mono': 'Courier'
+            }
+        
         # Пытаемся найти и зарегистрировать системные шрифты
         system_fonts = [
             # macOS шрифты
-            '/System/Library/Fonts/Helvetica.ttc',
             '/Library/Fonts/Arial.ttf',
+            '/System/Library/Fonts/Helvetica.ttc',
             '/System/Library/Fonts/Times.ttc',
             '/Library/Fonts/Times New Roman.ttf',
             
@@ -45,7 +55,6 @@ def register_cyrillic_fonts():
             # Linux шрифты
             '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
             '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-            '/usr/share/fonts/TTF/arial.ttf',
         ]
         
         fonts_registered = []
@@ -55,22 +64,19 @@ def register_cyrillic_fonts():
             if os.path.exists(font_path):
                 try:
                     if 'arial' in font_path.lower() or 'helvetica' in font_path.lower():
-                        if 'CyrillicSans' not in [f.fontName for f in pdfmetrics._fonts.values()]:
-                            pdfmetrics.registerFont(TTFont('CyrillicSans', font_path))
-                            fonts_registered.append('CyrillicSans')
-                            logger.info(f"Зарегистрирован шрифт CyrillicSans: {font_path}")
+                        pdfmetrics.registerFont(TTFont('CyrillicSans', font_path))
+                        fonts_registered.append('CyrillicSans')
+                        logger.info(f"Зарегистрирован шрифт CyrillicSans: {font_path}")
                     
                     elif 'times' in font_path.lower():
-                        if 'CyrillicSerif' not in [f.fontName for f in pdfmetrics._fonts.values()]:
-                            pdfmetrics.registerFont(TTFont('CyrillicSerif', font_path))
-                            fonts_registered.append('CyrillicSerif')
-                            logger.info(f"Зарегистрирован шрифт CyrillicSerif: {font_path}")
+                        pdfmetrics.registerFont(TTFont('CyrillicSerif', font_path))
+                        fonts_registered.append('CyrillicSerif')
+                        logger.info(f"Зарегистрирован шрифт CyrillicSerif: {font_path}")
                     
                     elif 'dejavu' in font_path.lower() or 'liberation' in font_path.lower():
-                        if 'CyrillicSans' not in [f.fontName for f in pdfmetrics._fonts.values()]:
-                            pdfmetrics.registerFont(TTFont('CyrillicSans', font_path))
-                            fonts_registered.append('CyrillicSans')
-                            logger.info(f"Зарегистрирован шрифт CyrillicSans: {font_path}")
+                        pdfmetrics.registerFont(TTFont('CyrillicSans', font_path))
+                        fonts_registered.append('CyrillicSans')
+                        logger.info(f"Зарегистрирован шрифт CyrillicSans: {font_path}")
                             
                 except Exception as e:
                     logger.warning(f"Не удалось зарегистрировать шрифт {font_path}: {e}")
@@ -80,16 +86,16 @@ def register_cyrillic_fonts():
                 if len(fonts_registered) >= 2:
                     break
         
-        # Если не удалось найти системные шрифты, используем встроенные ReportLab шрифты
+        # Если не удалось найти системные шрифты, используем встроенные шрифты
         if not fonts_registered:
-            logger.warning("Системные шрифты не найдены, используются встроенные шрифты ReportLab")
+            logger.warning("Системные шрифты не найдены, используем встроенные шрифты")
             return {'sans': 'Helvetica', 'serif': 'Times-Roman', 'mono': 'Courier'}
         
         # Возвращаем доступные шрифты
         available_fonts = {
             'sans': 'CyrillicSans' if 'CyrillicSans' in fonts_registered else 'Helvetica',
             'serif': 'CyrillicSerif' if 'CyrillicSerif' in fonts_registered else 'Times-Roman',
-            'mono': 'Courier'  # Courier обычно поддерживает кириллицу
+            'mono': 'Courier'
         }
         
         logger.info(f"Доступные шрифты: {available_fonts}")
@@ -185,7 +191,9 @@ class PDFReportGenerator:
         answer: str,
         data: Optional[pd.DataFrame] = None,
         sql_query: Optional[str] = None,
-        visualization_config: Optional[Dict[str, Any]] = None
+        visualization_config: Optional[Dict[str, Any]] = None,
+        visualization_configs: Optional[List[Dict[str, Any]]] = None,
+        analysis_result: Optional[Dict[str, Any]] = None
     ) -> bytes:
         """
         Генерация PDF отчета.
@@ -195,7 +203,9 @@ class PDFReportGenerator:
             answer: Ответ системы
             data: Данные таблицы
             sql_query: SQL запрос
-            visualization_config: Конфигурация визуализации
+            visualization_config: Конфигурация визуализации (одна)
+            visualization_configs: Список конфигураций визуализации (множественные)
+            analysis_result: Результаты анализа данных
             
         Returns:
             Байты PDF файла
@@ -251,15 +261,70 @@ class PDFReportGenerator:
                 story.append(table)
                 story.append(Spacer(1, 15))
             
-            # Визуализация (если есть)
-            if visualization_config:
-                story.append(PageBreak())
-                story.append(Paragraph("Визуализация:", self.heading_style))
+            # Результаты анализа (если есть)
+            if analysis_result and analysis_result.get("success", False):
+                story.append(Paragraph("Интеллектуальный анализ:", self.heading_style))
                 
-                chart_image = self._create_chart_image(visualization_config)
-                if chart_image:
-                    story.append(chart_image)
+                # AI инсайты
+                ai_insights = analysis_result.get("ai_insights", {})
+                if ai_insights and "error" not in ai_insights:
+                    # Ключевые выводы
+                    key_insights = ai_insights.get("key_insights", [])
+                    if key_insights:
+                        story.append(Paragraph("Ключевые выводы:", self.heading_style))
+                        for i, insight in enumerate(key_insights, 1):
+                            story.append(Paragraph(f"• {insight}", self.answer_style))
+                        story.append(Spacer(1, 10))
+                    
+                    # Статистические данные
+                    statistics = ai_insights.get("statistics", {})
+                    if statistics:
+                        story.append(Paragraph("Статистические показатели:", self.heading_style))
+                        for key, value in statistics.items():
+                            if isinstance(value, (int, float)):
+                                story.append(Paragraph(f"• {key}: {value:.2f}", self.answer_style))
+                            else:
+                                story.append(Paragraph(f"• {key}: {value}", self.answer_style))
+                        story.append(Spacer(1, 10))
+                
+                # Рекомендации
+                recommendations = analysis_result.get("recommendations", [])
+                if recommendations:
+                    story.append(Paragraph("Рекомендации:", self.heading_style))
+                    for i, rec in enumerate(recommendations, 1):
+                        story.append(Paragraph(f"{i}. {rec}", self.answer_style))
                     story.append(Spacer(1, 15))
+            
+            # Визуализации (если есть)
+            visualizations_to_process = []
+            
+            # Сначала добавляем одиночную визуализацию (для обратной совместимости)
+            if visualization_config:
+                visualizations_to_process.append(visualization_config)
+            
+            # Затем добавляем множественные визуализации
+            if visualization_configs:
+                visualizations_to_process.extend(visualization_configs)
+            
+            if visualizations_to_process:
+                story.append(PageBreak())
+                story.append(Paragraph("Визуализации:", self.heading_style))
+                
+                for i, viz_config in enumerate(visualizations_to_process, 1):
+                    if viz_config:
+                        # Добавляем заголовок для каждой визуализации
+                        if len(visualizations_to_process) > 1:
+                            viz_title = viz_config.get('title', f'График {i}')
+                            story.append(Paragraph(f"{i}. {viz_title}", self.heading_style))
+                        
+                        chart_image = self._create_chart_image(viz_config)
+                        if chart_image:
+                            story.append(chart_image)
+                            story.append(Spacer(1, 15))
+                        
+                        # Разделитель между графиками (кроме последнего)
+                        if i < len(visualizations_to_process):
+                            story.append(Spacer(1, 10))
             
             # Футер
             story.append(Spacer(1, 30))
@@ -470,12 +535,25 @@ class PDFReportGenerator:
             return None
 
 
+# Глобальный экземпляр генератора PDF для кэширования
+_pdf_generator = None
+
+def get_pdf_generator():
+    """Получение кэшированного экземпляра PDFReportGenerator."""
+    global _pdf_generator
+    if _pdf_generator is None:
+        _pdf_generator = PDFReportGenerator()
+    return _pdf_generator
+
+
 def generate_qa_pdf(
     question: str,
     answer: str,
     data: Optional[pd.DataFrame] = None,
     sql_query: Optional[str] = None,
-    visualization_config: Optional[Dict[str, Any]] = None
+    visualization_config: Optional[Dict[str, Any]] = None,
+    visualization_configs: Optional[List[Dict[str, Any]]] = None,
+    analysis_result: Optional[Dict[str, Any]] = None
 ) -> bytes:
     """
     Быстрая функция для генерации PDF отчета вопрос-ответ.
@@ -485,16 +563,157 @@ def generate_qa_pdf(
         answer: Ответ системы
         data: Данные таблицы
         sql_query: SQL запрос
-        visualization_config: Конфигурация визуализации
+        visualization_config: Конфигурация визуализации (одна)
+        visualization_configs: Список конфигураций визуализации (множественные)
+        analysis_result: Результаты анализа данных
         
     Returns:
         Байты PDF файла
     """
-    generator = PDFReportGenerator()
+    generator = get_pdf_generator()
     return generator.generate_report(
         question=question,
         answer=answer,
         data=data,
         sql_query=sql_query,
-        visualization_config=visualization_config
-    ) 
+        visualization_config=visualization_config,
+        visualization_configs=visualization_configs,
+        analysis_result=analysis_result
+    )
+
+
+def generate_full_history_pdf(qa_pairs: List[Dict[str, Any]]) -> bytes:
+    """
+    Генерация PDF отчета для полной истории с отдельными секциями для каждого Q&A.
+    
+    Args:
+        qa_pairs: Список словарей с парами вопрос-ответ
+        
+    Returns:
+        Байты PDF файла
+    """
+    try:
+        generator = get_pdf_generator()
+        
+        # Создаем буфер для PDF
+        buffer = io.BytesIO()
+        
+        # Создаем документ
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=72,
+            bottomMargin=18
+        )
+        
+        # Элементы документа
+        story = []
+        
+        # Общий заголовок
+        story.append(Paragraph("SberIndexNavigator", generator.title_style))
+        story.append(Paragraph("Полная история анализа данных", generator.heading_style))
+        story.append(Spacer(1, 20))
+        
+        # Метаданные
+        timestamp = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        story.append(Paragraph(f"Дата создания: {timestamp}", generator.meta_style))
+        story.append(Paragraph(f"Количество вопросов: {len(qa_pairs)}", generator.meta_style))
+        story.append(Spacer(1, 30))
+        
+        # Создаем отдельную секцию для каждого Q&A
+        for i, pair in enumerate(qa_pairs, 1):
+            # Заголовок секции
+            story.append(Paragraph(f"Вопрос {i} из {len(qa_pairs)}", generator.heading_style))
+            story.append(Spacer(1, 10))
+            
+            # Вопрос
+            story.append(Paragraph("Вопрос:", generator.heading_style))
+            story.append(Paragraph(pair['question'], generator.question_style))
+            story.append(Spacer(1, 15))
+            
+            # Ответ
+            story.append(Paragraph("Ответ:", generator.heading_style))
+            story.append(Paragraph(pair['answer'], generator.answer_style))
+            story.append(Spacer(1, 15))
+            
+            # SQL запрос (если есть)
+            if pair['sql_query']:
+                story.append(Paragraph("SQL запрос:", generator.heading_style))
+                story.append(Paragraph(pair['sql_query'], generator.code_style))
+                story.append(Spacer(1, 15))
+            
+            # Таблица данных (если есть)
+            if pair['data'] is not None and not pair['data'].empty:
+                story.append(Paragraph("Данные:", generator.heading_style))
+                table = generator._create_data_table(pair['data'])
+                story.append(table)
+                story.append(Spacer(1, 15))
+            
+            # Визуализация (если есть)
+            if pair['visualization']:
+                story.append(Paragraph("Визуализация:", generator.heading_style))
+                chart_image = generator._create_chart_image(pair['visualization'])
+                if chart_image:
+                    story.append(chart_image)
+                    story.append(Spacer(1, 15))
+            
+            # Результаты анализа (если есть)
+            analysis_result = pair.get('analysis')
+            if analysis_result and analysis_result.get("success", False):
+                story.append(Paragraph("Интеллектуальный анализ:", generator.heading_style))
+                
+                # AI инсайты
+                ai_insights = analysis_result.get("ai_insights", {})
+                if ai_insights and "error" not in ai_insights:
+                    # Ключевые выводы
+                    key_insights = ai_insights.get("key_insights", [])
+                    if key_insights:
+                        story.append(Paragraph("Ключевые выводы:", generator.heading_style))
+                        for insight in key_insights:
+                            story.append(Paragraph(f"• {insight}", generator.answer_style))
+                        story.append(Spacer(1, 10))
+                    
+                    # Статистические данные
+                    statistics = ai_insights.get("statistics", {})
+                    if statistics:
+                        story.append(Paragraph("Статистические показатели:", generator.heading_style))
+                        for key, value in statistics.items():
+                            if isinstance(value, (int, float)):
+                                story.append(Paragraph(f"• {key}: {value:.2f}", generator.answer_style))
+                            else:
+                                story.append(Paragraph(f"• {key}: {value}", generator.answer_style))
+                        story.append(Spacer(1, 10))
+                
+                # Рекомендации
+                recommendations = analysis_result.get("recommendations", [])
+                if recommendations:
+                    story.append(Paragraph("Рекомендации:", generator.heading_style))
+                    for j, rec in enumerate(recommendations, 1):
+                        story.append(Paragraph(f"{j}. {rec}", generator.answer_style))
+                    story.append(Spacer(1, 15))
+            
+            # Разделитель между секциями (кроме последней)
+            if i < len(qa_pairs):
+                story.append(Spacer(1, 30))
+                story.append(Paragraph("═" * 80, generator.meta_style))
+                story.append(PageBreak())
+        
+        # Футер
+        story.append(Spacer(1, 30))
+        story.append(Paragraph(
+            "Отчет сгенерирован автоматически системой SberIndexNavigator",
+            generator.meta_style
+        ))
+        
+        # Строим PDF
+        doc.build(story)
+        
+        # Возвращаем содержимое
+        buffer.seek(0)
+        return buffer.getvalue()
+        
+    except Exception as e:
+        logger.error(f"Ошибка генерации полного PDF отчета: {e}")
+        raise 

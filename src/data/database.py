@@ -7,6 +7,7 @@ import logging
 import os
 import duckdb
 import pandas as pd
+import re
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 
@@ -39,6 +40,47 @@ class DatabaseManager:
             logger.error(f"Ошибка подключения к базе данных: {e}")
             raise
     
+    def clean_sql_query(self, query: str) -> str:
+        """
+        Очистка SQL-запроса от markdown форматирования и других артефактов.
+        
+        Args:
+            query: Сырой SQL-запрос, возможно с markdown форматированием
+            
+        Returns:
+            Очищенный SQL-запрос
+        """
+        try:
+            # Удаляем markdown code blocks
+            query = re.sub(r'```sql\s*', '', query)
+            query = re.sub(r'```\s*', '', query)
+            
+            # Удаляем дополнительные пробелы и переносы строк
+            query = query.strip()
+            
+            # Удаляем комментарии вида "-- объяснение"
+            lines = query.split('\n')
+            cleaned_lines = []
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('--'):
+                    cleaned_lines.append(line)
+            
+            query = ' '.join(cleaned_lines)
+            
+            # Убираем лишние пробелы
+            query = re.sub(r'\s+', ' ', query)
+            
+            # Убираем точку с запятой в конце если есть
+            query = query.rstrip(';')
+            
+            logger.debug(f"Очищенный SQL-запрос: {query}")
+            return query
+            
+        except Exception as e:
+            logger.error(f"Ошибка очистки SQL-запроса: {e}")
+            return query.strip()
+    
     def execute_query(self, query: str, parameters: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
         """
         Выполнение SQL-запроса и возврат результата как DataFrame.
@@ -51,16 +93,20 @@ class DatabaseManager:
             DataFrame с результатами запроса
         """
         try:
+            # Очищаем запрос от markdown и артефактов
+            clean_query = self.clean_sql_query(query)
+            
             if parameters:
-                result = self.connection.execute(query, parameters).fetchdf()
+                result = self.connection.execute(clean_query, parameters).fetchdf()
             else:
-                result = self.connection.execute(query).fetchdf()
+                result = self.connection.execute(clean_query).fetchdf()
             
             logger.info(f"Запрос выполнен успешно, получено {len(result)} строк")
             return result
         except Exception as e:
             logger.error(f"Ошибка выполнения запроса: {e}")
-            logger.error(f"Запрос: {query}")
+            logger.error(f"Исходный запрос: {query}")
+            logger.error(f"Очищенный запрос: {self.clean_sql_query(query)}")
             raise
     
     def create_tables(self) -> None:
@@ -189,11 +235,16 @@ class DatabaseManager:
             True если запрос валиден, False иначе
         """
         try:
+            # Очищаем запрос перед валидацией
+            clean_query = self.clean_sql_query(query)
+            
             # Используем EXPLAIN для проверки синтаксиса
-            self.connection.execute(f"EXPLAIN {query}")
+            self.connection.execute(f"EXPLAIN {clean_query}")
             return True
         except Exception as e:
             logger.warning(f"Невалидный запрос: {e}")
+            logger.warning(f"Исходный запрос: {query}")
+            logger.warning(f"Очищенный запрос: {self.clean_sql_query(query)}")
             return False
     
     def close(self) -> None:

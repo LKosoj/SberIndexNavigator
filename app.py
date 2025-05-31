@@ -25,7 +25,7 @@ from src.agents.analysis_agent import get_analysis_agent
 from src.agents.visualize_tool import get_visualization_analyzer
 from src.visualization.charts import get_chart_creator
 from src.visualization.maps import get_map_creator
-from src.utils.pdf_export import generate_qa_pdf
+from src.utils.pdf_export import generate_qa_pdf, generate_full_history_pdf
 from src.utils.analysis_ui import get_analysis_ui_renderer, render_analysis_quick_summary
 
 logger = logging.getLogger(__name__)
@@ -211,9 +211,16 @@ def render_chat_interface():
                                     st.success(f"**{idx}.** {rec}")
             
             # Кнопка экспорта в PDF для ответов с данными
-            if (message["role"] == "assistant" and 
-                ("data" in message or "visualization" in message or "analysis" in message)):
-                
+            # Проверяем все возможные условия для отладки
+            has_data = "data" in message and message["data"] is not None and not message["data"].empty
+            has_viz = "visualization" in message and message["visualization"] is not None
+            is_assistant = message["role"] == "assistant"
+            
+            # Добавляем дебаг информацию (только в режиме разработки)
+            if is_assistant and st.session_state.get("debug_mode", False):
+                st.caption(f"Debug: has_data={has_data}, has_viz={has_viz}, keys={list(message.keys())}")
+            
+            if is_assistant and (has_data or has_viz):
                 # Получаем предыдущий вопрос пользователя
                 user_question = ""
                 if i > 0 and st.session_state.messages[i-1]["role"] == "user":
@@ -234,8 +241,7 @@ def render_chat_interface():
                 
                 # Кнопка повторного анализа
                 with col2:
-                    if ("data" in message and not message["data"].empty and 
-                        st.session_state.enable_analysis):
+                    if (has_data and st.session_state.enable_analysis):
                         if st.button(f"🔄 Переанализ", key=f"reanalyze_{i}"):
                             with st.spinner("Повторный анализ данных..."):
                                 try:
@@ -262,7 +268,7 @@ def render_chat_interface():
 
 
 def export_full_history_to_pdf():
-    """Экспорт всей истории чата в PDF."""
+    """Экспорт всей истории чата в PDF с полными разделами для каждого Q&A."""
     try:
         if not st.session_state.messages:
             st.warning("История чата пуста")
@@ -282,7 +288,8 @@ def export_full_history_to_pdf():
                         "answer": message["content"],
                         "data": message.get("data"),
                         "sql_query": message.get("sql_query"),
-                        "visualization": message.get("visualization")
+                        "visualization": message.get("visualization"),
+                        "analysis": message.get("analysis")
                     })
                     current_question = ""
             
@@ -290,31 +297,11 @@ def export_full_history_to_pdf():
                 st.warning("В истории нет завершенных вопросов и ответов")
                 return
             
-            # Создаем комбинированный ответ
-            combined_answer = "Полная история анализа данных:\n\n"
-            all_data = []
+            # Создаем PDF с несколькими отдельными Q&A секциями
+            # Мы будем генерировать один большой PDF со всеми разделами
             
-            for i, pair in enumerate(qa_pairs, 1):
-                combined_answer += f"{i}. {pair['answer']}\n\n"
-                if pair['data'] is not None and not pair['data'].empty:
-                    all_data.append(pair['data'])
-            
-            # Объединяем все данные если есть
-            combined_data = None
-            if all_data:
-                try:
-                    combined_data = pd.concat(all_data, ignore_index=True)
-                except:
-                    combined_data = all_data[0]  # Берем первые данные если объединение не удалось
-            
-            # Генерируем PDF
-            pdf_bytes = generate_qa_pdf(
-                question="Полная история анализа",
-                answer=combined_answer,
-                data=combined_data,
-                sql_query=None,
-                visualization_config=None
-            )
+            # Используем модифицированную версию PDF генератора для множественных Q&A
+            pdf_bytes = generate_full_history_pdf(qa_pairs)
             
             # Создаем имя файла
             from datetime import datetime
@@ -506,6 +493,21 @@ def process_user_input(user_input: str):
                                     assistant_message["content"] += rec_text
                             
                             st.session_state.messages.append(assistant_message)
+                            
+                            # Добавляем кнопку экспорта сразу после обработки
+                            st.markdown("---")
+                            col1, col2, col3 = st.columns([1, 1, 4])
+                            with col1:
+                                if st.button("📄 Экспорт PDF", key=f"export_current_result"):
+                                    export_to_pdf(
+                                        question=user_input,
+                                        answer=assistant_message["content"],
+                                        data=assistant_message.get("data"),
+                                        sql_query=assistant_message.get("sql_query"),
+                                        visualization_config=assistant_message.get("visualization"),
+                                        analysis_result=assistant_message.get("analysis"),
+                                        message_index=len(st.session_state.messages)-1
+                                    )
                         
                         else:
                             st.warning("Данные не найдены. Попробуйте переформулировать вопрос.")

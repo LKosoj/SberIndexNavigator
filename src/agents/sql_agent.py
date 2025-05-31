@@ -16,6 +16,7 @@ import duckdb
 import tempfile
 import shutil
 import os
+import re
 
 from src.config.settings import (
     OPENAI_API_KEY, 
@@ -92,51 +93,58 @@ class SqlAgent:
             logger.error(f"Ошибка инициализации SQL-агента: {e}")
             raise
     
-    def generate_sql_query(self, user_question: str) -> str:
+    def generate_sql_query(self, user_question: str, attempt: int = 1) -> str:
         """
-        Генерация SQL-запроса на основе вопроса пользователя.
+        Генерация SQL-запроса на основе вопроса пользователя с retry логикой.
         
         Args:
             user_question: Вопрос пользователя на естественном языке
+            attempt: Номер попытки генерации (для логирования)
             
         Returns:
             SQL-запрос в виде строки
         """
         try:
             # Формируем промпт для генерации SQL
-            prompt = f"""
+            base_prompt = f"""
             {SQL_AGENT_SYSTEM_PROMPT}
             
             Вопрос пользователя: {user_question}
             
             Сгенерируй SQL-запрос для ответа на этот вопрос. 
-            Верни *ТОЛЬКО* SQL-запрос без дополнительных объяснений.
+            Верни *ТОЛЬКО* SQL-запрос без дополнительных объяснений, комментариев и markdown форматирования.
+            Не используй тройные кавычки или другие декораторы.
             """
             
+            # Добавляем дополнительные инструкции при повторных попытках
+            if attempt > 1:
+                base_prompt += f"""
+                
+                ВАЖНО: Это попытка номер {attempt}. Предыдущие попытки были неуспешными.
+                Убедись что SQL-запрос:
+                - Использует только существующие таблицы и колонки
+                - Имеет правильный синтаксис
+                - Не содержит markdown форматирования
+                - Не содержит объяснений или комментариев
+                """
+            
             # Используем LLM для генерации SQL
-            response = self.llm.invoke(prompt)
+            response = self.llm.invoke(base_prompt)
             sql_query = response.content.strip()
             
             # Очищаем SQL от markdown форматирования
-            if sql_query.startswith("```sql"):
-                sql_query = sql_query[6:]
-            if sql_query.startswith("```"):
-                sql_query = sql_query[3:]
-            if sql_query.endswith("```"):
-                sql_query = sql_query[:-3]
+            sql_query = self.db_manager.clean_sql_query(sql_query)
             
-            sql_query = sql_query.strip()
-            
-            logger.info(f"Сгенерирован SQL-запрос: {sql_query}")
+            logger.info(f"Сгенерирован SQL-запрос (попытка {attempt}): {sql_query}")
             return sql_query
             
         except Exception as e:
-            logger.error(f"Ошибка генерации SQL-запроса: {e}")
+            logger.error(f"Ошибка генерации SQL-запроса (попытка {attempt}): {e}")
             raise
     
-    def execute_query(self, sql_query: str) -> pd.DataFrame:
+    def execute_query_with_retry(self, sql_query: str) -> pd.DataFrame:
         """
-        Выполнение SQL-запроса и возврат результата.
+        Выполнение SQL-запроса с обработкой ошибок и retry логикой.
         
         Args:
             sql_query: SQL-запрос для выполнения
@@ -157,11 +165,24 @@ class SqlAgent:
             
         except Exception as e:
             logger.error(f"Ошибка выполнения SQL-запроса: {e}")
+            logger.error(f"Проблемный запрос: {sql_query}")
             raise
+    
+    def execute_query(self, sql_query: str) -> pd.DataFrame:
+        """
+        Выполнение SQL-запроса и возврат результата.
+        
+        Args:
+            sql_query: SQL-запрос для выполнения
+            
+        Returns:
+            DataFrame с результатами запроса
+        """
+        return self.execute_query_with_retry(sql_query)
     
     def analyze_question(self, user_question: str) -> Dict[str, Any]:
         """
-        Полный анализ вопроса пользователя: генерация SQL и выполнение.
+        Полный анализ вопроса пользователя: генерация SQL и выполнение с retry логикой.
         
         Args:
             user_question: Вопрос пользователя на естественном языке
@@ -169,34 +190,66 @@ class SqlAgent:
         Returns:
             Словарь с результатами анализа
         """
-        try:
-            # Генерируем SQL-запрос
-            sql_query = self.generate_sql_query(user_question)
-            
-            # Выполняем запрос
-            data = self.execute_query(sql_query)
-            
-            # Формируем результат
-            result = {
-                "question": user_question,
-                "sql_query": sql_query,
-                "data": data,
-                "success": True,
-                "error": None
-            }
-            
-            logger.info(f"Анализ вопроса завершен успешно")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Ошибка анализа вопроса: {e}")
-            return {
-                "question": user_question,
-                "sql_query": None,
-                "data": pd.DataFrame(),
-                "success": False,
-                "error": str(e)
-            }
+        last_error = None
+        last_sql_query = None
+        
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                logger.info(f"Анализ вопроса, попытка {attempt}/{MAX_RETRIES}")
+                
+                # Генерируем SQL-запрос
+                sql_query = self.generate_sql_query(user_question, attempt)
+                last_sql_query = sql_query
+                
+                # Выполняем запрос
+                data = self.execute_query_with_retry(sql_query)
+                
+                # Формируем успешный результат
+                result = {
+                    "question": user_question,
+                    "sql_query": sql_query,
+                    "data": data,
+                    "success": True,
+                    "error": None,
+                    "attempts": attempt
+                }
+                
+                logger.info(f"Анализ вопроса завершен успешно с {attempt} попытки")
+                return result
+                
+            except Exception as e:
+                last_error = e
+                error_msg = str(e)
+                
+                logger.warning(f"Попытка {attempt}/{MAX_RETRIES} неуспешна: {error_msg}")
+                
+                # Если это последняя попытка, возвращаем ошибку
+                if attempt == MAX_RETRIES:
+                    logger.error(f"Все {MAX_RETRIES} попытки исчерпаны для вопроса: {user_question}")
+                    break
+                
+                # Проверяем тип ошибки для определения стратегии retry
+                if "syntax error" in error_msg.lower() or "parser error" in error_msg.lower():
+                    logger.info(f"Обнаружена ошибка синтаксиса, перегенерируем запрос...")
+                    continue
+                elif "невалидный" in error_msg.lower() or "invalid" in error_msg.lower():
+                    logger.info(f"Обнаружена ошибка валидации, перегенерируем запрос...")
+                    continue
+                else:
+                    # Для других ошибок тоже пробуем еще раз
+                    logger.info(f"Обнаружена ошибка: {error_msg}, перегенерируем запрос...")
+                    continue
+        
+        # Если все попытки неуспешны
+        logger.error(f"Не удалось проанализировать вопрос после {MAX_RETRIES} попыток")
+        return {
+            "question": user_question,
+            "sql_query": last_sql_query,
+            "data": pd.DataFrame(),
+            "success": False,
+            "error": f"Не удалось сгенерировать корректный SQL после {MAX_RETRIES} попыток. Последняя ошибка: {str(last_error)}",
+            "attempts": MAX_RETRIES
+        }
     
     def get_table_schema(self) -> Dict[str, List[str]]:
         """

@@ -197,3 +197,4 @@ cython_debug/
 /.vscode
 ck.md
 .DS_Store
+CHANGELOG.md
