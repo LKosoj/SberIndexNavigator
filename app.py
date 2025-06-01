@@ -415,6 +415,7 @@ def process_user_input(user_input: str):
                     
                     # Анализируем вопрос
                     result = sql_agent.analyze_question(user_input)
+                    #result = sql_agent.analyze_question_hybrid(user_input)
                     
                     if result["success"]:
                         if not result["data"].empty:
