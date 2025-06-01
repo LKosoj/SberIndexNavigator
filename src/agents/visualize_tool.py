@@ -135,7 +135,7 @@ class VisualizationAnalyzer:
             )
             
             # Проверка на географические данные
-            geo_keywords = ['region', 'city', 'lat', 'lon', 'регион', 'город', 'координат']
+            geo_keywords = ['region', 'city', 'lat', 'lon', 'муниципалитет', 'город', 'координат']
             analysis["has_geographic_data"] = any(
                 any(keyword in col.lower() for keyword in geo_keywords)
                 for col in df.columns
@@ -245,7 +245,7 @@ class VisualizationAnalyzer:
             elif chart_type == "map":
                 # Для карты ищем географические колонки
                 geo_cols = [col for col in df.columns if any(
-                    keyword in col.lower() for keyword in ['region', 'city', 'регион', 'город']
+                    keyword in col.lower() for keyword in ['region', 'city', 'муниципалитет', 'город']
                 )]
                 config["location_column"] = geo_cols[0] if geo_cols else None
                 

@@ -117,7 +117,7 @@ class ChartCreator:
             'market_accessibility': 'Доступность рынков',
             'month': 'Месяц',
             'year': 'Год',
-            'region': 'Регион',
+            'region': 'Муниципалитет',
             'population': 'Население',
             'age_median': 'Медианный возраст',
             'income_median': 'Медианный доход',

@@ -112,7 +112,7 @@ class DatabaseManager:
     def create_tables(self) -> None:
         """Создание схемы таблиц для индексов Сбербанка."""
         try:
-            # Таблица расходов по регионам
+            # Таблица расходов по муниципалитетам
             self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS region_spending (
                     region VARCHAR,
@@ -162,7 +162,7 @@ class DatabaseManager:
         try:
             data_dir = Path("data")
             
-            # Загрузка данных по регионам
+            # Загрузка данных по муниципалитетам
             if (data_dir / "test_region.csv").exists():
                 df_region = pd.read_csv(data_dir / "test_region.csv")
                 self.connection.register("region_df", df_region)

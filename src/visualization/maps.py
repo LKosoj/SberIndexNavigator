@@ -38,7 +38,7 @@ class MapCreator:
     
     def _load_geo_data(self) -> Optional[Dict]:
         """
-        Загрузка географических данных регионов.
+        Загрузка географических данных муниципалитетов.
         
         Returns:
             GeoJSON данные или None при ошибке
@@ -57,7 +57,7 @@ class MapCreator:
     
     def create_scatter_map(self, config: Dict[str, Any]) -> go.Figure:
         """
-        Создание точечной карты с маркерами регионов.
+        Создание точечной карты с маркерами муниципалитетов.
         
         Args:
             config: Конфигурация карты
@@ -104,7 +104,7 @@ class MapCreator:
     
     def create_choropleth_map(self, config: Dict[str, Any]) -> go.Figure:
         """
-        Создание хороплетной карты (заливка регионов по значениям).
+        Создание хороплетной карты (заливка муниципалитетов по значениям).
         
         Args:
             config: Конфигурация карты
@@ -202,7 +202,7 @@ class MapCreator:
         
         Args:
             df: Исходный DataFrame
-            location_col: Колонка с названиями регионов
+            location_col: Колонка с названиями муниципалитетов
             value_col: Колонка со значениями
             
         Returns:

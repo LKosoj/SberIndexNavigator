@@ -105,13 +105,24 @@ class SqlAgent:
             SQL-запрос в виде строки
         """
         try:
+            # Получаем актуальную схему базы данных
+            table_info = self.db_manager.get_table_info()
+            schema_info = "\n".join([
+                f"Таблица {table}: {', '.join(columns)}" 
+                for table, columns in table_info.items()
+            ])
+            
             # Формируем промпт для генерации SQL
             base_prompt = f"""
             {SQL_AGENT_SYSTEM_PROMPT}
             
+            АКТУАЛЬНАЯ СХЕМА БАЗЫ ДАННЫХ:
+            {schema_info}
+            
             Вопрос пользователя: {user_question}
             
             Сгенерируй SQL-запрос для ответа на этот вопрос. 
+            ИСПОЛЬЗУЙ ТОЛЬКО СУЩЕСТВУЮЩИЕ ТАБЛИЦЫ И КОЛОНКИ ИЗ СХЕМЫ ВЫШЕ!
             Верни *ТОЛЬКО* SQL-запрос без дополнительных объяснений, комментариев и markdown форматирования.
             Не используй тройные кавычки или другие декораторы.
             """
@@ -122,7 +133,7 @@ class SqlAgent:
                 
                 ВАЖНО: Это попытка номер {attempt}. Предыдущие попытки были неуспешными.
                 Убедись что SQL-запрос:
-                - Использует только существующие таблицы и колонки
+                - Использует только существующие таблицы и колонки ИЗ СХЕМЫ ВЫШЕ
                 - Имеет правильный синтаксис
                 - Не содержит markdown форматирования
                 - Не содержит объяснений или комментариев
@@ -293,4 +304,15 @@ def get_sql_agent() -> SqlAgent:
     global sql_agent
     if sql_agent is None:
         sql_agent = SqlAgent()
-    return sql_agent 
+    return sql_agent
+
+
+def reset_sql_agent() -> None:
+    """
+    Сброс синглтона SQL-агента для перезагрузки конфигурации.
+    """
+    global sql_agent
+    if sql_agent is not None and hasattr(sql_agent, '__del__'):
+        sql_agent.__del__()
+    sql_agent = None
+    logger.info("SQL-агент сброшен, будет создан заново при следующем обращении") 

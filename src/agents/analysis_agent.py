@@ -69,7 +69,7 @@ class AnalysisAgent:
             "comparative": """
 Ты - эксперт по анализу данных индексов Сбербанка. Проведи сравнительный анализ.
 
-ЗАДАЧА: Сравни данные между регионами/периодами и найди:
+ЗАДАЧА: Сравни данные между муниципалитетами/периодами и найди:
 1. Лидеров и аутсайдеров
 2. Существенные различия
 3. Причины различий
@@ -252,24 +252,65 @@ class AnalysisAgent:
             if numeric_data.empty:
                 return {"error": "Нет числовых данных для анализа"}
             
+            # Проверяем общий размер выборки
+            sample_size = len(numeric_data)
+            logger.info(f"Выполняется статистический анализ для {sample_size} записей")
+            
             stats_summary = {
+                "sample_size": sample_size,
                 "basic_stats": numeric_data.describe().to_dict(),
-                "correlation_matrix": numeric_data.corr().to_dict() if len(numeric_data.columns) > 1 else {},
                 "missing_values": data.isnull().sum().to_dict(),
                 "data_types": data.dtypes.astype(str).to_dict(),
-                "outliers": self._detect_outliers(numeric_data),
-                "distribution_analysis": self._analyze_distributions(numeric_data)
             }
             
-            # Кластерный анализ если данных достаточно
-            if len(numeric_data) > 10 and len(numeric_data.columns) > 1:
-                stats_summary["clustering"] = self._perform_clustering(numeric_data)
+            # Корреляционная матрица только при достаточном количестве колонок и данных
+            if len(numeric_data.columns) > 1 and sample_size >= 3:
+                try:
+                    correlation_matrix = numeric_data.corr()
+                    # Проверяем на NaN в корреляционной матрице
+                    if not correlation_matrix.isnull().all().all():
+                        stats_summary["correlation_matrix"] = correlation_matrix.to_dict()
+                    else:
+                        stats_summary["correlation_matrix"] = {}
+                        logger.warning("Корреляционная матрица содержит только NaN значения")
+                except Exception as e:
+                    logger.warning(f"Ошибка вычисления корреляционной матрицы: {e}")
+                    stats_summary["correlation_matrix"] = {}
+            else:
+                stats_summary["correlation_matrix"] = {}
+            
+            # Детектирование выбросов
+            try:
+                stats_summary["outliers"] = self._detect_outliers(numeric_data)
+            except Exception as e:
+                logger.warning(f"Ошибка обнаружения выбросов: {e}")
+                stats_summary["outliers"] = {}
+            
+            # Анализ распределений
+            try:
+                stats_summary["distribution_analysis"] = self._analyze_distributions(numeric_data)
+            except Exception as e:
+                logger.warning(f"Ошибка анализа распределений: {e}")
+                stats_summary["distribution_analysis"] = {}
+            
+            # Кластерный анализ только если данных достаточно
+            if sample_size > 10 and len(numeric_data.columns) > 1:
+                try:
+                    clustering_result = self._perform_clustering(numeric_data)
+                    if "error" not in clustering_result:
+                        stats_summary["clustering"] = clustering_result
+                    else:
+                        logger.info(f"Кластерный анализ пропущен: {clustering_result['error']}")
+                except Exception as e:
+                    logger.warning(f"Ошибка кластерного анализа: {e}")
+            else:
+                logger.info(f"Кластерный анализ пропущен: недостаточно данных (требуется >10 записей и >1 колонки)")
             
             return stats_summary
             
         except Exception as e:
             logger.error(f"Ошибка статистического анализа: {e}")
-            return {"error": str(e)}
+            return {"error": str(e), "sample_size": len(data) if data is not None else 0}
     
     def _detect_outliers(self, data: pd.DataFrame) -> Dict[str, List]:
         """Обнаружение выбросов в данных."""
@@ -294,45 +335,96 @@ class AnalysisAgent:
         
         for column in data.columns:
             if data[column].dtype in ['int64', 'float64']:
-                # Тест на нормальность
-                _, p_value = stats.normaltest(data[column].dropna())
+                # Убираем NaN значения
+                clean_data = data[column].dropna()
                 
-                distributions[column] = {
-                    "skewness": float(data[column].skew()),
-                    "kurtosis": float(data[column].kurtosis()),
-                    "normality_p_value": float(p_value),
-                    "is_normal": p_value > 0.05
-                }
+                # Проверяем достаточный размер выборки для статистических тестов
+                if len(clean_data) < 8:
+                    # Недостаточно данных для полного статистического анализа
+                    distributions[column] = {
+                        "skewness": float(data[column].skew()) if len(clean_data) >= 3 else None,
+                        "kurtosis": float(data[column].kurtosis()) if len(clean_data) >= 4 else None,
+                        "normality_p_value": None,
+                        "is_normal": None,
+                        "sample_size": len(clean_data),
+                        "warning": f"Недостаточно данных для статистического анализа (требуется минимум 8, есть {len(clean_data)})"
+                    }
+                else:
+                    # Тест на нормальность (только при достаточном количестве данных)
+                    try:
+                        _, p_value = stats.normaltest(clean_data)
+                        distributions[column] = {
+                            "skewness": float(data[column].skew()),
+                            "kurtosis": float(data[column].kurtosis()),
+                            "normality_p_value": float(p_value),
+                            "is_normal": p_value > 0.05,
+                            "sample_size": len(clean_data)
+                        }
+                    except Exception as e:
+                        logger.warning(f"Ошибка анализа распределения для {column}: {e}")
+                        distributions[column] = {
+                            "skewness": float(data[column].skew()),
+                            "kurtosis": float(data[column].kurtosis()),
+                            "normality_p_value": None,
+                            "is_normal": None,
+                            "sample_size": len(clean_data),
+                            "error": str(e)
+                        }
         
         return distributions
     
     def _perform_clustering(self, data: pd.DataFrame) -> Dict[str, Any]:
         """Кластерный анализ данных."""
         try:
+            # Проверяем минимальный размер выборки для кластерного анализа
+            if len(data) < 4:
+                logger.warning(f"Недостаточно данных для кластерного анализа (требуется минимум 4, есть {len(data)})")
+                return {"error": f"Недостаточно данных для кластерного анализа (есть {len(data)} записей, требуется минимум 4)"}
+            
+            # Получаем только числовые данные без NaN
+            numeric_data = data.select_dtypes(include=[np.number]).dropna()
+            
+            if len(numeric_data) < 4:
+                logger.warning(f"Недостаточно чистых числовых данных для кластерного анализа (есть {len(numeric_data)})")
+                return {"error": f"Недостаточно чистых числовых данных для кластерного анализа (есть {len(numeric_data)} записей)"}
+            
+            if len(numeric_data.columns) < 2:
+                logger.warning("Недостаточно числовых колонок для кластерного анализа")
+                return {"error": "Требуется минимум 2 числовые колонки для кластерного анализа"}
+            
             # Стандартизация данных
             scaler = StandardScaler()
-            scaled_data = scaler.fit_transform(data.fillna(data.mean()))
+            scaled_data = scaler.fit_transform(numeric_data)
             
-            # K-means кластеризация
-            n_clusters = min(4, len(data) // 3)  # Разумное количество кластеров
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+            # K-means кластеризация с адаптивным количеством кластеров
+            max_clusters = min(4, len(numeric_data) // 2)  # Не более половины от количества записей
+            n_clusters = max(2, max_clusters)  # Минимум 2 кластера
+            
+            if n_clusters < 2:
+                return {"error": "Недостаточно данных для создания минимум 2 кластеров"}
+            
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
             clusters = kmeans.fit_predict(scaled_data)
             
             # Анализ кластеров
             cluster_analysis = {}
             for i in range(n_clusters):
-                cluster_data = data[clusters == i]
-                cluster_analysis[f"cluster_{i}"] = {
-                    "size": len(cluster_data),
-                    "mean_values": cluster_data.mean().to_dict(),
-                    "characteristics": self._describe_cluster(cluster_data, data)
-                }
+                cluster_mask = clusters == i
+                cluster_data = numeric_data[cluster_mask]
+                
+                if len(cluster_data) > 0:
+                    cluster_analysis[f"cluster_{i}"] = {
+                        "size": len(cluster_data),
+                        "mean_values": cluster_data.mean().to_dict(),
+                        "characteristics": self._describe_cluster(cluster_data, numeric_data)
+                    }
             
             return {
                 "n_clusters": n_clusters,
                 "cluster_labels": clusters.tolist(),
                 "cluster_analysis": cluster_analysis,
-                "inertia": float(kmeans.inertia_)
+                "inertia": float(kmeans.inertia_),
+                "sample_size": len(numeric_data)
             }
             
         except Exception as e:
@@ -436,6 +528,11 @@ class AnalysisAgent:
         """Идентификация трендов в данных."""
         trends = {}
         
+        # Проверяем минимальный размер данных для трендового анализа
+        if len(data) < 3:
+            logger.warning(f"Недостаточно данных для трендового анализа (требуется минимум 3, есть {len(data)})")
+            return {"error": f"Недостаточно данных для трендового анализа (есть {len(data)} записей, требуется минимум 3)"}
+        
         # Ищем временные колонки
         time_columns = [col for col in data.columns if 'month' in col.lower() or 'date' in col.lower() or 'time' in col.lower()]
         numeric_columns = data.select_dtypes(include=[np.number]).columns
@@ -445,22 +542,54 @@ class AnalysisAgent:
             
             for num_col in numeric_columns:
                 if num_col != time_col:
-                    # Простая линейная регрессия для определения тренда
-                    x = np.arange(len(data))
-                    y = data[num_col].fillna(data[num_col].mean())
+                    # Убираем NaN значения
+                    clean_data = data[num_col].dropna()
                     
-                    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+                    if len(clean_data) < 3:
+                        trends[num_col] = {
+                            "error": f"Недостаточно данных для анализа тренда (есть {len(clean_data)} значений, требуется минимум 3)",
+                            "sample_size": len(clean_data)
+                        }
+                        continue
                     
-                    trend_direction = "возрастающий" if slope > 0 else "убывающий"
-                    trend_strength = "сильный" if abs(r_value) > 0.7 else "слабый" if abs(r_value) > 0.3 else "отсутствует"
-                    
-                    trends[num_col] = {
-                        "direction": trend_direction,
-                        "strength": trend_strength,
-                        "slope": float(slope),
-                        "r_squared": float(r_value ** 2),
-                        "p_value": float(p_value)
-                    }
+                    try:
+                        # Простая линейная регрессия для определения тренда
+                        x = np.arange(len(clean_data))
+                        y = clean_data.values
+                        
+                        # Дополнительная проверка на вариативность данных
+                        if np.var(y) == 0:
+                            trends[num_col] = {
+                                "direction": "отсутствует",
+                                "strength": "нет_вариации",
+                                "slope": 0.0,
+                                "r_squared": 0.0,
+                                "p_value": 1.0,
+                                "sample_size": len(clean_data),
+                                "warning": "Все значения одинаковы"
+                            }
+                            continue
+                        
+                        slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+                        
+                        trend_direction = "возрастающий" if slope > 0 else "убывающий"
+                        trend_strength = "сильный" if abs(r_value) > 0.7 else "слабый" if abs(r_value) > 0.3 else "отсутствует"
+                        
+                        trends[num_col] = {
+                            "direction": trend_direction,
+                            "strength": trend_strength,
+                            "slope": float(slope),
+                            "r_squared": float(r_value ** 2),
+                            "p_value": float(p_value),
+                            "sample_size": len(clean_data)
+                        }
+                        
+                    except Exception as e:
+                        logger.warning(f"Ошибка анализа тренда для {num_col}: {e}")
+                        trends[num_col] = {
+                            "error": str(e),
+                            "sample_size": len(clean_data)
+                        }
         
         return trends
     
@@ -586,7 +715,7 @@ class AnalysisAgent:
             recommendations.append("Исследовать выявленные выбросы для понимания их природы и причин")
         
         if "clustering" in stats_analysis and "cluster_analysis" in stats_analysis["clustering"]:
-            recommendations.append("Использовать кластерный анализ для сегментации регионов и персонализации подходов")
+            recommendations.append("Использовать кластерный анализ для сегментации муниципалитетов и персонализации подходов")
         
         # Рекомендации на основе качества данных
         if "data_quality" in stats_analysis:
