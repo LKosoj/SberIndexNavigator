@@ -47,7 +47,7 @@ class SqlAgent:
             if not OPENAI_API_KEY:
                 raise ValueError("OPENAI_API_KEY не установлен")
             
-            # Инициализация LLM с отключенным streaming для агентов
+            # Инициализация LLM для кастомной логики (с отключенным streaming)
             llm_kwargs = {
                 "model": OPENAI_MODEL,
                 "temperature": OPENAI_TEMPERATURE,
@@ -62,6 +62,20 @@ class SqlAgent:
             
             self.llm = ChatOpenAI(**llm_kwargs)
             
+            # Инициализация ОТДЕЛЬНОГО LLM для SQLDatabaseToolkit с disable_streaming=True
+            agent_llm_kwargs = {
+                "model": OPENAI_MODEL,
+                "temperature": OPENAI_TEMPERATURE,
+                "openai_api_key": OPENAI_API_KEY,
+                "disable_streaming": True,  # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ для SQLDatabaseToolkit
+                "verbose": False
+            }
+            
+            if OPENAI_BASE_URL:
+                agent_llm_kwargs["base_url"] = OPENAI_BASE_URL
+            
+            agent_llm = ChatOpenAI(**agent_llm_kwargs)
+            
             # Создание SQLDatabase объекта для LangChain
             # Используем in-memory DuckDB для избежания конфликтов
             # Скопируем данные из основной базы
@@ -75,12 +89,12 @@ class SqlAgent:
             self.sql_db = SQLDatabase.from_uri(db_uri)
             self.temp_db_path = temp_db
             
-            # Создание toolkit
-            toolkit = SQLDatabaseToolkit(db=self.sql_db, llm=self.llm)
+            # Создание toolkit с LLM без streaming
+            toolkit = SQLDatabaseToolkit(db=self.sql_db, llm=agent_llm)
             
             # Создание агента с оптимизированными настройками
             self.agent = create_sql_agent(
-                llm=self.llm,
+                llm=agent_llm,  # Используем LLM без streaming
                 toolkit=toolkit,
                 agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
                 verbose=True,
@@ -334,27 +348,47 @@ class SqlAgent:
             # Выполняем запрос через агента
             result = self.agent.invoke({"input": agent_prompt})
             
-            # Извлекаем SQL запрос из результата агента (если он есть)
+            # Извлекаем SQL запрос из результата агента
             sql_query = self._extract_sql_from_agent_result(result)
             
-            # Если агент вернул данные напрямую, используем их
-            if 'output' in result:
+            # Пытаемся извлечь данные из intermediate_steps
+            data = pd.DataFrame()
+            
+            # Сначала пробуем извлечь данные напрямую из observation в intermediate_steps
+            if 'intermediate_steps' in result:
+                for step in result['intermediate_steps']:
+                    if isinstance(step, tuple) and len(step) >= 2:
+                        action, observation = step
+                        # Ищем результаты sql_db_query
+                        if (hasattr(action, 'tool') and 'sql_db_query' in str(action.tool) and 
+                            observation and isinstance(observation, str)):
+                            
+                            logger.info("Найден результат SQL запроса в intermediate_steps")
+                            # Пытаемся распарсить observation как табличные данные
+                            parsed_data = self._parse_sql_observation(observation)
+                            if not parsed_data.empty:
+                                data = parsed_data
+                                logger.info(f"Успешно извлечены данные из observation: {len(data)} строк")
+                                break
+            
+            # Если не получилось извлечь из intermediate_steps, пробуем из агентского вывода
+            if data.empty and 'output' in result:
                 agent_output = result['output']
-                
-                # Пытаемся извлечь данные из ответа агента
                 data = self._extract_data_from_agent_output(agent_output, sql_query)
-                
+            
+            # Проверяем успешность
+            if not data.empty or (sql_query and len(sql_query.strip()) > 0):
                 return {
                     "question": user_question,
                     "sql_query": sql_query,
                     "data": data,
                     "success": True,
                     "error": None,
-                    "agent_output": agent_output,
+                    "agent_output": result.get('output', ''),
                     "method": "sql_toolkit_agent"
                 }
             else:
-                raise ValueError("Агент не вернул ожидаемый результат")
+                raise ValueError("Агент не вернул данные или SQL запрос")
                 
         except Exception as e:
             logger.error(f"Ошибка анализа с помощью SQL агента: {e}")
@@ -366,6 +400,71 @@ class SqlAgent:
                 "error": f"Ошибка SQL агента: {str(e)}",
                 "method": "sql_toolkit_agent"
             }
+
+    def _parse_sql_observation(self, observation: str) -> pd.DataFrame:
+        """
+        Парсинг результата SQL запроса из observation в intermediate_steps.
+        
+        Args:
+            observation: Строка с результатом SQL запроса
+            
+        Returns:
+            DataFrame с данными
+        """
+        try:
+            logger.debug(f"Парсинг SQL observation: {observation[:200]}...")
+            
+            lines = observation.strip().split('\n')
+            data_rows = []
+            headers = None
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Ищем строки с разделителем | (стандартный вывод DuckDB)
+                if '|' in line and line.count('|') >= 1:
+                    # Удаляем крайние пайпы если есть  
+                    line = line.strip('|').strip()
+                    cells = [cell.strip() for cell in line.split('|')]
+                    
+                    # Пропускаем строки-разделители
+                    if all(cell.replace('-', '').replace(' ', '') == '' for cell in cells):
+                        continue
+                    
+                    # Первая строка - заголовки
+                    if headers is None:
+                        headers = cells
+                        logger.debug(f"Найдены заголовки: {headers}")
+                    else:
+                        # Добавляем строку данных если количество колонок совпадает
+                        if len(cells) == len(headers):
+                            data_rows.append(cells)
+                            logger.debug(f"Добавлена строка: {cells}")
+            
+            # Создаем DataFrame
+            if headers and data_rows:
+                df = pd.DataFrame(data_rows, columns=headers)
+                
+                # Преобразуем числовые колонки
+                for col in df.columns:
+                    try:
+                        # Убираем запятые и пробелы из чисел
+                        if df[col].dtype == 'object':
+                            df[col] = df[col].astype(str).str.replace(',', '').str.replace(' ', '')
+                            df[col] = pd.to_numeric(df[col], errors='ignore')
+                    except:
+                        pass
+                
+                logger.info(f"Успешно создан DataFrame из observation: {len(df)} строк")
+                return df
+            
+            return pd.DataFrame()
+            
+        except Exception as e:
+            logger.warning(f"Ошибка парсинга SQL observation: {e}")
+            return pd.DataFrame()
 
     def _extract_sql_from_agent_result(self, result: Dict[str, Any]) -> Optional[str]:
         """
@@ -383,6 +482,7 @@ class SqlAgent:
                 for step in result['intermediate_steps']:
                     if isinstance(step, tuple) and len(step) >= 2:
                         action, observation = step
+                        # Ищем действия sql_db_query
                         if hasattr(action, 'tool') and 'sql_db_query' in str(action.tool):
                             if hasattr(action, 'tool_input'):
                                 # Извлекаем SQL из tool_input
@@ -391,22 +491,12 @@ class SqlAgent:
                                     return tool_input['query']
                                 elif isinstance(tool_input, str):
                                     return tool_input
-            
-            # Пытаемся найти SQL в выводе агента
-            if 'output' in result:
-                output = result['output']
-                # Простой поиск паттернов SELECT, INSERT, UPDATE, DELETE
-                sql_patterns = [
-                    r'(?i)(SELECT\s+.*?(?:FROM|;|$))',
-                    r'(?i)(INSERT\s+.*?(?:VALUES|;|$))',
-                    r'(?i)(UPDATE\s+.*?(?:SET|;|$))',
-                    r'(?i)(DELETE\s+.*?(?:FROM|;|$))'
-                ]
-                
-                for pattern in sql_patterns:
-                    match = re.search(pattern, output, re.MULTILINE | re.DOTALL)
-                    if match:
-                        return match.group(1).strip()
+                        # Также ищем в самом action если это AgentAction
+                        elif hasattr(action, 'tool_input') and isinstance(action.tool_input, str):
+                            # Проверяем, является ли tool_input SQL запросом
+                            tool_input = action.tool_input.strip()
+                            if any(keyword in tool_input.upper() for keyword in ['SELECT', 'INSERT', 'UPDATE', 'DELETE']):
+                                return tool_input
             
             return None
             
@@ -426,15 +516,15 @@ class SqlAgent:
             DataFrame с данными
         """
         try:
-            # Если есть SQL запрос, выполняем его напрямую
+            # Если есть SQL запрос, выполняем его напрямую для получения актуальных данных
             if sql_query:
                 try:
+                    logger.info(f"Выполняю извлеченный SQL запрос: {sql_query[:100]}...")
                     return self.execute_query_with_retry(sql_query)
                 except Exception as e:
                     logger.warning(f"Не удалось выполнить извлеченный SQL запрос: {e}")
             
-            # Пытаемся парсить табличные данные из текста агента
-            # Ищем простые табличные форматы
+            # Улучшенный парсинг табличных данных из текста агента
             lines = agent_output.split('\n')
             data_rows = []
             headers = None
@@ -444,33 +534,46 @@ class SqlAgent:
                 if not line:
                     continue
                 
-                # Ищем разделители таблиц (|, \t, множественные пробелы)
-                if '|' in line and line.count('|') >= 2:
-                    # Парсим как таблицу с разделителем |
-                    cells = [cell.strip() for cell in line.split('|') if cell.strip()]
+                # Ищем строки с разделителем | (как в выводе DuckDB)
+                if '|' in line and line.count('|') >= 1:
+                    # Удаляем крайние пайпы если есть
+                    line = line.strip('|').strip()
+                    cells = [cell.strip() for cell in line.split('|')]
+                    
+                    # Пропускаем строки-разделители (только дефисы и пайпы)
+                    if all(cell.replace('-', '').replace(' ', '') == '' for cell in cells):
+                        continue
+                    
+                    # Первая строка с данными - это заголовки
                     if headers is None:
                         headers = cells
+                        logger.info(f"Найдены заголовки таблицы: {headers}")
                     else:
-                        data_rows.append(cells)
-                elif '\t' in line:
-                    # Парсим как таблицу с табуляцией
-                    cells = [cell.strip() for cell in line.split('\t') if cell.strip()]
-                    if headers is None:
-                        headers = cells
-                    else:
-                        data_rows.append(cells)
+                        # Проверяем что количество колонок совпадает
+                        if len(cells) == len(headers):
+                            data_rows.append(cells)
+                            logger.debug(f"Добавлена строка данных: {cells}")
             
             # Создаем DataFrame если нашли данные
             if headers and data_rows:
-                # Убеждаемся что все строки имеют одинаковую длину
-                max_cols = len(headers)
-                normalized_rows = []
-                for row in data_rows:
-                    if len(row) == max_cols:
-                        normalized_rows.append(row)
+                logger.info(f"Создаю DataFrame с {len(data_rows)} строками и колонками: {headers}")
                 
-                if normalized_rows:
-                    return pd.DataFrame(normalized_rows, columns=headers)
+                # Преобразуем типы данных
+                df = pd.DataFrame(data_rows, columns=headers)
+                
+                # Пытаемся преобразовать числовые колонки
+                for col in df.columns:
+                    # Пробуем преобразовать в числа
+                    try:
+                        # Убираем запятые из больших чисел
+                        df[col] = df[col].str.replace(',', '')
+                        # Пробуем преобразовать в float
+                        df[col] = pd.to_numeric(df[col], errors='ignore')
+                    except:
+                        pass  # Оставляем как строку если не получается
+                
+                logger.info(f"Успешно извлечен DataFrame: {len(df)} строк, {len(df.columns)} колонок")
+                return df
             
             # Если не удалось извлечь табличные данные, возвращаем пустой DataFrame
             logger.info("Не удалось извлечь табличные данные из вывода агента")
