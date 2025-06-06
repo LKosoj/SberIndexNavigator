@@ -7,6 +7,8 @@ duckdb>=0.9.0
 duckdb-engine>=0.17.0
 pandas>=2.0.0
 numpy>=1.24.0
+smolagents
+smolagents[toolkit]
 
 # Visualization
 plotly>=5.17.0
