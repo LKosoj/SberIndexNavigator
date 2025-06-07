@@ -13,8 +13,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-duckdb.install_extension('spatial')
-duckdb.load_extension('spatial')
+#duckdb.install_extension('spatial')
+#duckdb.load_extension('spatial')
 
 class DatabaseManager:
     """Менеджер базы данных DuckDB для SberIndexNavigator."""
