@@ -1288,3 +1288,19 @@ setup_logging()
 
 if not validate_config():
     logging.warning("Конфигурация содержит ошибки. Проверьте настройки.") 
+
+
+def get_openai_settings() -> dict:
+    """
+    Получение настроек OpenAI из переменных окружения.
+    
+    Returns:
+        Словарь с настройками OpenAI
+    """
+    return {
+        'api_key': OPENAI_API_KEY,
+        'base_url': OPENAI_BASE_URL,
+        'model': OPENAI_MODEL,
+        'temperature': OPENAI_TEMPERATURE,
+        'max_tokens': OPENAI_MAX_TOKENS
+    }

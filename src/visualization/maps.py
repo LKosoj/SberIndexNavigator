@@ -240,6 +240,42 @@ class MapCreator:
             logger.error(f"Ошибка создания пузырьковой карты: {e}")
             return self._create_error_map(str(e))
     
+    def _enrich_with_geocoding(self, df: pd.DataFrame, location_col: str) -> pd.DataFrame:
+        """
+        Обогащение DataFrame координатами через геокодинг.
+        
+        Args:
+            df: DataFrame для обогащения
+            location_col: Колонка с названиями муниципалитетов
+            
+        Returns:
+            DataFrame с добавленными координатами
+        """
+        try:
+            from src.utils.geocoding import get_geocoding_service
+            
+            geocoding_service = get_geocoding_service()
+            
+            # Определяем колонку с регионами
+            region_col = None
+            for col in df.columns:
+                if 'region' in col.lower():
+                    region_col = col
+                    break
+            
+            # Обогащаем данные координатами
+            enriched_df = geocoding_service.enrich_dataframe_with_coordinates(
+                df, 
+                city_column=location_col,
+                region_column=region_col
+            )
+            
+            return enriched_df
+            
+        except Exception as e:
+            logger.warning(f"Ошибка геокодинга: {e}")
+            return df
+    
     def _prepare_geo_dataframe(self, df: pd.DataFrame, location_col: str, value_col: Optional[str]) -> pd.DataFrame:
         """
         Подготовка DataFrame с географическими координатами.
@@ -264,14 +300,36 @@ class MapCreator:
                 geo_df['lat'] = pd.to_numeric(geo_df[lat_cols[0]], errors='coerce')
                 geo_df['lon'] = pd.to_numeric(geo_df[lon_cols[0]], errors='coerce')
                 
-                # Удаляем записи без координат
+                # Проверяем количество записей с координатами
+                valid_coords_count = geo_df[['lat', 'lon']].dropna().shape[0]
+                total_count = len(geo_df)
+                
+                logger.info(f"Координаты найдены для {valid_coords_count} из {total_count} записей")
+                
+                # Если есть записи без координат, пробуем их геокодировать
+                if valid_coords_count < total_count:
+                    logger.info("Пытаемся добавить координаты для записей без них через геокодинг")
+                    geo_df = self._enrich_with_geocoding(geo_df, location_col)
+                
+                # Удаляем записи без координат только после попытки геокодинга
                 geo_df = geo_df.dropna(subset=['lat', 'lon'])
                 logger.info(f"Подготовлен DataFrame с координатами: {len(geo_df)} записей")
                 return geo_df
             
+            # Если координат нет, пробуем геокодинг
+            logger.info("Координаты не найдены в данных, пытаемся использовать геокодинг")
+            geo_df = self._enrich_with_geocoding(df.copy(), location_col)
+            
+            # Проверяем результат геокодинга
+            if 'lat' in geo_df.columns and 'lon' in geo_df.columns:
+                geo_df = geo_df.dropna(subset=['lat', 'lon'])
+                if not geo_df.empty:
+                    logger.info(f"Геокодинг успешен: {len(geo_df)} записей с координатами")
+                    return geo_df
+            
             # Fallback: пытаемся использовать GeoJSON если есть
             if not self.geo_data:
-                logger.warning("Нет ни координат в данных, ни GeoJSON файла")
+                logger.warning("Нет ни координат в данных, ни GeoJSON файла, ни успешного геокодинга")
                 return pd.DataFrame()
             
             # Создаем словарь координат из GeoJSON
