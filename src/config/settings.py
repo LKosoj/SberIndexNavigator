@@ -475,7 +475,8 @@ SELECT e.municipality FROM employment_full e
 ❌ JOIN + GROUP BY без координат (когда есть таблицы с координатами)
 ❌ Использование фильтра `IS NOT NULL` для координат (исключает важные города)
 ❌ Прямое использование координат без агрегации в GROUP BY запросах
-❌ Взятие координат из таблицы БЕЗ координат вместо таблицы С координатами
+❌ Взятие координат из таблицы БЕЗ координат (kom_sph, employment_full, organization_quantity и др.)
+❌ ЗАБЫВАТЬ добавить JOIN с dict_municipal_districts когда основная таблица БЕЗ координат
 
 🚨 **КРИТИЧЕСКИЕ АНТИ-ПАТТЕРНЫ ПОИСКА ГОРОДОВ:**
 ❌ Поиск Москвы/СПб в municipality вместо region_name (Москва → region_name = 'Москва'!)
@@ -590,20 +591,22 @@ GROUP BY e.region_name, e.municipality
 
 ❌ **НЕПРАВИЛЬНО - координаты из таблицы БЕЗ координат:**
 ```sql
+-- ❌ НЕ ДЕЛАЙ ТАК - kom_sph БЕЗ координат!
+SELECT k.municipality, k.indicator_value,
+       AVG(k.municipal_district_center_lat) AS lat  -- ❌ ОШИБКА! У kom_sph НЕТ координат!
+FROM kom_sph k
+
 -- ❌ НЕ ДЕЛАЙ ТАК - soc_people_quantity_payments_volume БЕЗ координат!
 SELECT s.municipality, s.indicator_value,
        AVG(s.municipal_district_center_lat) AS lat  -- ❌ ОШИБКА! У таблицы s нет координат!
 FROM soc_people_quantity_payments_volume s
-JOIN market_access_full m ON s.territory_id = m.territory_id
 
--- ✅ ПРАВИЛЬНО - координаты из таблицы С координатами:
-SELECT s.municipality, s.indicator_value,
-       AVG(m.municipal_district_center_lat) AS lat,  -- ✅ Берем из m (market_access_full)!
-       AVG(m.municipal_district_center_lon) AS lon
-FROM soc_people_quantity_payments_volume s
-JOIN market_access_full m ON s.territory_id = m.territory_id
--- ✅ НЕ фильтруем координаты - показываем данные даже без карты
-GROUP BY s.municipality
+-- ✅ ПРАВИЛЬНО - добавляем JOIN для координат:
+SELECT k.municipality, k.indicator_value,
+       AVG(d.municipal_district_center_lat) AS lat,  -- ✅ Берем из dict_municipal_districts!
+       AVG(d.municipal_district_center_lon) AS lon
+FROM kom_sph k  -- БЕЗ координат
+JOIN dict_municipal_districts d ON k.territory_id = d.territory_id  -- Добавляем для координат!
 ```
 
 🎯 **АЛГОРИТМ ВЫБОРА ИСТОЧНИКА КООРДИНАТ:**
@@ -618,38 +621,48 @@ GROUP BY s.municipality
 - `dict_municipal_districts` → dict_municipal_districts.municipal_district_center_lat/lon
 - `t_dict_municipal_districts_poly_full` → t_dict_municipal_districts_poly_full.municipal_district_center_lat/lon
 
-❌ **НЕ ИМЕЮТ координаты:**
-- `employment_full` → БЕЗ координат
-- `organization_quantity` → БЕЗ координат
-- `production_quantity` → БЕЗ координат
-- `retail_catering` → БЕЗ координат
-- `kom_sph` → БЕЗ координат
-- `selhoz` → БЕЗ координат
-- `selhoz_territory` → БЕЗ координат
-- `soc_people_quantity_payments_volume` → БЕЗ координат
+❌ **НЕ ИМЕЮТ координаты (ОБЯЗАТЕЛЬНО добавь JOIN с dict_municipal_districts!):**
+- `employment_full` → БЕЗ координат → JOIN dict_municipal_districts
+- `organization_quantity` → БЕЗ координат → JOIN dict_municipal_districts  
+- `production_quantity` → БЕЗ координат → JOIN dict_municipal_districts
+- `retail_catering` → БЕЗ координат → JOIN dict_municipal_districts
+- `kom_sph` → БЕЗ координат → JOIN dict_municipal_districts
+- `selhoz` → БЕЗ координат → JOIN dict_municipal_districts
+- `selhoz_territory` → БЕЗ координат → JOIN dict_municipal_districts
+- `soc_people_quantity_payments_volume` → БЕЗ координат → JOIN dict_municipal_districts
 - `connection_full` → специальный случай с _x/_y координатами
 
+💡 **ПРОСТОЕ ПРАВИЛО:**
+ЕСЛИ основная таблица НЕ в списке ✅ → ОБЯЗАТЕЛЬНО добавь `JOIN dict_municipal_districts d ON main.territory_id = d.territory_id`
+
 🔧 **ПРАВИЛА ВЫБОРА ИСТОЧНИКА:**
-1. **В JOIN найди таблицу С координатами:**
+1. **ПРОВЕРЬ основную таблицу на координаты:**
+   ```sql
+   -- ✅ ЕСЛИ основная таблица ИМЕЕТ координаты:
+   SELECT main.region_name, main.municipality,
+          AVG(main.municipal_district_center_lat) AS lat,
+          AVG(main.municipal_district_center_lon) AS lon
+   FROM bdmo_salary_full main  -- ИМЕЕТ координаты
+   ```
+
+2. **ЕСЛИ основная таблица БЕЗ координат → ОБЯЗАТЕЛЬНО добавь JOIN:**
+   ```sql
+   -- ✅ ПРАВИЛЬНО - kom_sph БЕЗ координат, добавляем dict_municipal_districts
+   SELECT k.region_name, k.municipality, k.indicator_value,
+          AVG(d.municipal_district_center_lat) AS lat,
+          AVG(d.municipal_district_center_lon) AS lon
+   FROM kom_sph k  -- БЕЗ координат!
+   JOIN dict_municipal_districts d ON k.territory_id = d.territory_id  -- Добавляем для координат
+   ```
+
+3. **В сложных JOIN найди любую таблицу С координатами:**
    ```sql
    -- ✅ ПРАВИЛЬНО - берем координаты из market_access_full
    SELECT s.municipality, s.indicator_value,
-          -- Координаты из таблицы С координатами:
           AVG(m.municipal_district_center_lat) AS lat,
           AVG(m.municipal_district_center_lon) AS lon
    FROM soc_people_quantity_payments_volume s  -- БЕЗ координат
    JOIN market_access_full m ON s.territory_id = m.territory_id  -- С координатами!
-   ```
-
-2. **Если ни одна таблица в JOIN не имеет координат → добавь JOIN:**
-   ```sql
-   -- ✅ ПРАВИЛЬНО - добавляем dict_municipal_districts для координат
-   SELECT s.municipality, o.indicator_value,
-          AVG(d.municipal_district_center_lat) AS lat,
-          AVG(d.municipal_district_center_lon) AS lon
-   FROM soc_people_quantity_payments_volume s
-   JOIN organization_quantity o ON s.territory_id = o.territory_id
-   JOIN dict_municipal_districts d ON s.territory_id = d.territory_id  -- Добавили для координат!
    ```
 
 3. **Приоритет источников координат (если несколько таблиц с координатами):**
