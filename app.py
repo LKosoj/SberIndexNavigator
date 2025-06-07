@@ -21,15 +21,94 @@ from src.config.settings import (
     create_streamlit_config
 )
 from src.data.database import initialize_database, get_database_manager
-from src.agents.sql_agent import get_sql_agent
-from src.agents.analysis_agent import get_analysis_agent
-from src.agents.visualize_tool import get_visualization_analyzer
+from src.agents.coordinator_agent import get_coordinator_agent
 from src.visualization.charts import get_chart_creator
 from src.visualization.maps import get_map_creator
 from src.utils.pdf_export import generate_qa_pdf, generate_full_history_pdf
 from src.utils.analysis_ui import get_analysis_ui_renderer, render_analysis_quick_summary
 
 logger = logging.getLogger(__name__)
+
+
+@st.cache_data(ttl=300)  # Кэшируем на 5 минут
+def get_database_info():
+    """
+    Получение информации о базе данных с кэшированием.
+    
+    Returns:
+        Словарь с информацией о таблицах и данных
+    """
+    try:
+        from datetime import datetime
+        db_manager = get_database_manager()
+        summary = db_manager.get_database_summary()
+        
+        # Добавляем время обновления
+        summary["last_updated"] = datetime.now().strftime("%H:%M:%S")
+        
+        return summary
+    except Exception as e:
+        logger.error(f"Ошибка получения информации о БД: {e}")
+        return {
+            "tables": {},
+            "total_tables": 0,
+            "total_records": 0,
+            "available_regions": [],
+            "last_updated": "Ошибка"
+        }
+
+
+def render_database_info():
+    """Отрисовка информации о доступных данных в базе."""
+    # Заголовок с кнопкой обновления
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.header("📊 Доступные данные")
+    with col2:
+        if st.button("🔄", help="Обновить информацию о данных", key="refresh_db_info"):
+            # Очищаем кэш и принудительно обновляем данные
+            get_database_info.clear()
+            st.rerun()
+    
+    db_info = get_database_info()
+    
+    if db_info["total_tables"] == 0:
+        st.warning("⚠️ Данные не загружены")
+        return
+    
+    # Общая статистика
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("📈 Таблиц", db_info["total_tables"])
+    with col2:
+        st.metric("📋 Всего записей", f"{db_info['total_records']:,}")
+    with col3:
+        st.metric("🕐 Обновлено", db_info.get("last_updated", "N/A"))
+    
+    # Информация о таблицах
+    st.subheader("🗃️ Таблицы:")
+    for table_name, table_info in db_info["tables"].items():
+        with st.expander(f"`{table_name}` - {table_info['description']}", expanded=False):
+            st.write(f"**Записей:** {table_info['record_count']:,}")
+            st.write(f"**Колонки:** {', '.join(table_info['columns'][:5])}")
+            if len(table_info['columns']) > 5:
+                st.write(f"... и ещё {len(table_info['columns']) - 5} колонок")
+    
+    # Информация о регионах
+    if db_info["available_regions"]:
+        st.subheader("🌍 Муниципалитеты:")
+        region_count = len(db_info["available_regions"])
+        st.write(f"**Доступно:** {region_count} муниципалитетов")
+        
+        # Показываем несколько примеров
+        if region_count > 0:
+            examples = db_info["available_regions"][:5]
+            st.write(f"**Примеры:** {', '.join(examples)}")
+            if region_count > 5:
+                st.write(f"... и ещё {region_count - 5} муниципалитетов")
+    else:
+        st.subheader("🌍 Муниципалитеты:")
+        st.write("Информация о регионах недоступна")
 
 
 def setup_page_config():
@@ -53,8 +132,7 @@ def initialize_session_state():
     if "database_initialized" not in st.session_state:
         st.session_state.database_initialized = False
     
-    if "agents_initialized" not in st.session_state:
-        st.session_state.agents_initialized = False
+# agents_initialized больше не нужен - используется только координатор
     
     # Добавляем флаг для предотвращения дублирования обработки
     if "processing_request" not in st.session_state:
@@ -135,18 +213,8 @@ def render_sidebar():
         
         st.markdown("---")
         
-        st.header("📊 Доступные данные")
-        st.markdown("""
-        **Таблицы:**
-        - `region_spending` - расходы по муниципалитетам
-        - `demographics` - демографические данные  
-        - `transport_data` - транспортная доступность по муниципалитетам
-        
-        **Муниципалитеты:**
-        - Москва, Санкт-Петербург, Казань
-        - Владивосток, Новосибирск и др.
-        - Все муниципалитеты России
-        """)
+        # Динамическая информация о базе данных
+        render_database_info()
         
         st.markdown("---")
         
@@ -156,10 +224,7 @@ def render_sidebar():
         else:
             st.error("❌ База данных не подключена")
         
-        if st.session_state.agents_initialized:
-            st.success("✅ AI агенты готовы")
-        else:
-            st.warning("⚠️ AI агенты не инициализированы")
+        st.success("✅ LangGraph Coordinator готов")
         
         if st.session_state.enable_analysis:
             st.success("✅ Анализ данных включен")
@@ -244,28 +309,11 @@ def render_chat_interface():
                             message_index=i
                         )
                 
-                # Кнопка повторного анализа
+                # Кнопка повторного анализа (через координатора)
                 with col2:
                     if (has_data and st.session_state.enable_analysis):
                         if st.button(f"🔄 Переанализ", key=f"reanalyze_{i}"):
-                            with st.spinner("Повторный анализ данных..."):
-                                try:
-                                    analysis_agent = get_analysis_agent()
-                                    new_analysis = analysis_agent.analyze_data(
-                                        message["data"], 
-                                        user_question
-                                    )
-                                    
-                                    if new_analysis and new_analysis.get("success", False):
-                                        # Обновляем сообщение
-                                        st.session_state.messages[i]["analysis"] = new_analysis
-                                        st.success("✅ Анализ обновлен!")
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Ошибка повторного анализа")
-                                        
-                                except Exception as e:
-                                    st.error(f"Ошибка: {e}")
+                            st.info("💡 Для переанализа задайте вопрос заново - координатор выполнит полный анализ")
     
     # Поле ввода для нового вопроса
     if prompt := st.chat_input("Введите ваш вопрос о данных индексов..."):
@@ -406,126 +454,76 @@ def process_user_input(user_input: str):
         with st.chat_message("user"):
             st.markdown(user_input)
         
-        # Обработка запроса
+        # Обработка запроса с помощью LangGraph Coordinator
         with st.chat_message("assistant"):
-            with st.spinner("Анализирую ваш вопрос..."):
+            with st.spinner("🧠 Планирую выполнение задачи..."):
                 try:
-                    # Получаем SQL-агент
-                    sql_agent = get_sql_agent()
-                    
-                    # Анализируем вопрос
-                    result = sql_agent.analyze_question(user_input)
-                    #result = sql_agent.analyze_question_hybrid(user_input)
+                    # Используем новую систему на базе LangGraph
+                    coordinator = get_coordinator_agent()
+                    result = coordinator.process_question(user_input)
                     
                     if result["success"]:
+                        # Отображаем ответ координатора
+                        st.markdown(result["response"])
+                        
+                        # Если есть данные, отображаем их
                         if not result["data"].empty:
-                            # Отображаем базовую информацию
-                            st.markdown(f"**Результат анализа:** {user_input}")
-                            
-                            # Отображаем данные
                             st.subheader("📊 Найденные данные")
                             st.dataframe(result["data"], use_container_width=True)
+                        
+                        # Если есть визуализация, отображаем её
+                        if result.get("visualization"):
+                            st.subheader("📈 Визуализация")
+                            render_visualization(result["visualization"])
+                        
+                        # Если есть анализ, отображаем его
+                        if result.get("analysis"):
+                            analysis = result["analysis"]
+                            if analysis.get("ai_insights"):
+                                st.markdown("---")
+                                st.subheader("🧠 AI Анализ")
+                                render_analysis_quick_summary(analysis["ai_insights"])
                             
-                            # Создаем визуализацию
-                            visualization_config = create_visualization(result["data"], user_input)
-                            
-                            if visualization_config:
-                                st.subheader("📈 Визуализация")
-                                render_visualization(visualization_config)
-                            
-                            # === БЛОК АНАЛИЗА ДАННЫХ ===
-                            analysis_result = None
-                            
-                            if st.session_state.enable_analysis:
-                                with st.spinner("Провожу интеллектуальный анализ данных..."):
-                                    try:
-                                        # Получаем агент анализа
-                                        analysis_agent = get_analysis_agent()
-                                        
-                                        # ОСНОВНОЙ ВЫЗОВ АНАЛИЗА
-                                        analysis_result = analysis_agent.analyze_data(result["data"], user_input)
-                                        
-                                        if analysis_result and analysis_result.get("success", False):
-                                            st.markdown("---")
-                                            st.success("🧠 Анализ данных завершен успешно!")
-                                            
-                                            # Получаем рекомендации
-                                            recommendations = analysis_result.get("recommendations", [])
-                                            if recommendations:
-                                                st.subheader("💡 Рекомендации")
-                                                for i, rec in enumerate(recommendations[:3], 1):
-                                                    st.success(f"**{i}.** {rec}")
-                                            
-                                            # AI инсайты
-                                            ai_insights = analysis_result.get("ai_insights", {})
-                                            if ai_insights and "error" not in ai_insights:
-                                                st.subheader("🧠 AI Анализ")
-                                                render_analysis_quick_summary(ai_insights)
-                                        else:
-                                            st.error("❌ Анализ данных не удался")
-                                    
-                                    except Exception as e:
-                                        logger.error(f"Ошибка при анализе данных: {e}")
-                                        st.error(f"❌ Ошибка при анализе: {e}")
-                            
-                            # Сохраняем в историю
-                            assistant_message = {
-                                "role": "assistant",
-                                "content": f"**Результат анализа:** {user_input}",
-                                "data": result["data"],
-                                "sql_query": result["sql_query"]
-                            }
-                            
-                            if visualization_config:
-                                assistant_message["visualization"] = visualization_config
-                            
-                            # Добавляем результаты анализа в сообщение
-                            if analysis_result and analysis_result.get("success", False):
-                                assistant_message["analysis"] = analysis_result
-                                
-                                # Добавляем краткое резюме в контент
-                                ai_insights = analysis_result.get("ai_insights", {})
-                                if "key_insights" in ai_insights and ai_insights["key_insights"]:
-                                    insights_text = "\n\n**Ключевые выводы:**\n"
-                                    for insight in ai_insights["key_insights"][:2]:
-                                        insights_text += f"• {insight}\n"
-                                    assistant_message["content"] += insights_text
-                                
-                                recommendations = analysis_result.get("recommendations", [])
-                                if recommendations:
-                                    rec_text = "\n**Рекомендации:**\n"
-                                    for i, rec in enumerate(recommendations[:2], 1):
-                                        rec_text += f"{i}. {rec}\n"
-                                    assistant_message["content"] += rec_text
-                            
-                            st.session_state.messages.append(assistant_message)
-                            
-                            # Добавляем кнопку экспорта сразу после обработки
+                            # Рекомендации
+                            recommendations = analysis.get("recommendations", [])
+                            if recommendations:
+                                st.subheader("💡 Рекомендации")
+                                for i, rec in enumerate(recommendations[:3], 1):
+                                    st.success(f"**{i}.** {rec}")
+                        
+                        # Сохраняем в историю
+                        assistant_message = {
+                            "role": "assistant",
+                            "content": result["response"],
+                            "data": result["data"],
+                            "sql_query": result.get("sql_query", ""),
+                            "analysis": result.get("analysis", {}),
+                            "visualization": result.get("visualization", {})
+                        }
+                        
+                        st.session_state.messages.append(assistant_message)
+                        
+                        # Добавляем кнопку экспорта
+                        if not result["data"].empty or result.get("analysis") or result.get("visualization"):
                             st.markdown("---")
                             col1, col2, col3 = st.columns([1, 1, 4])
                             with col1:
                                 if st.button("📄 Экспорт PDF", key=f"export_current_result"):
                                     export_to_pdf(
                                         question=user_input,
-                                        answer=assistant_message["content"],
-                                        data=assistant_message.get("data"),
-                                        sql_query=assistant_message.get("sql_query"),
-                                        visualization_config=assistant_message.get("visualization"),
-                                        analysis_result=assistant_message.get("analysis"),
+                                        answer=result["response"],
+                                        data=result["data"] if not result["data"].empty else None,
+                                        sql_query=result.get("sql_query"),
+                                        visualization_config=result.get("visualization"),
+                                        analysis_result=result.get("analysis"),
                                         message_index=len(st.session_state.messages)-1
                                     )
-                        
-                        else:
-                            st.warning("Данные не найдены. Попробуйте переформулировать вопрос.")
-                            st.session_state.messages.append({
-                                "role": "assistant",
-                                "content": "Данные не найдены. Попробуйте переформулировать вопрос."
-                            })
                     else:
-                        st.error(f"Ошибка анализа: {result['error']}")
+                        error_msg = result.get("error", "Неизвестная ошибка")
+                        st.error(f"❌ Ошибка: {error_msg}")
                         st.session_state.messages.append({
                             "role": "assistant",
-                            "content": f"Ошибка анализа: {result['error']}"
+                            "content": f"Ошибка: {error_msg}"
                         })
                         
                 except Exception as e:
@@ -540,33 +538,7 @@ def process_user_input(user_input: str):
         st.session_state.processing_request = False
 
 
-def create_visualization(data: pd.DataFrame, question: str) -> Optional[Dict[str, Any]]:
-    """
-    Создание конфигурации визуализации для данных.
-    
-    Args:
-        data: DataFrame с данными
-        question: Вопрос пользователя
-        
-    Returns:
-        Конфигурация визуализации или None
-    """
-    try:
-        # Получаем анализатор визуализации
-        viz_analyzer = get_visualization_analyzer()
-        
-        # Определяем тип визуализации
-        chart_type = viz_analyzer.determine_chart_type(data, question)
-        
-        # Получаем конфигурацию
-        config = viz_analyzer.get_visualization_config(chart_type, data)
-        config["title"] = f"Анализ: {question}"
-        
-        return config
-        
-    except Exception as e:
-        logger.error(f"Ошибка создания визуализации: {e}")
-        return None
+# create_visualization удалена - теперь визуализация создается в координаторе
 
 
 def render_visualization(config: Dict[str, Any]):
@@ -628,7 +600,6 @@ def main():
     
     # Обновляем статус инициализации
     st.session_state.database_initialized = True
-    st.session_state.agents_initialized = success
     
     # Отрисовка интерфейса
     render_header()

@@ -214,15 +214,17 @@ class VisualizationAnalyzer:
             if chart_type == "line":
                 # Для линейного графика ищем временную колонку
                 time_cols = [col for col in df.columns if any(
-                    keyword in col.lower() for keyword in ['month', 'date', 'time', 'месяц', 'год']
+                    keyword in col.lower() for keyword in ['year', 'month', 'date', 'time', 'год', 'месяц']
                 )]
                 config["x_column"] = time_cols[0] if time_cols else text_cols[0] if text_cols else None
+                logger.info(f"Line chart: найденные временные колонки: {time_cols}, выбрана x_column: {config['x_column']}")
                 
-                # Для y_column исключаем id, year и другие служебные колонки
+                # Для y_column исключаем id и другие служебные колонки, но НЕ year (он используется как x_column)
                 value_cols = [col for col in numeric_cols if not any(
-                    keyword in col.lower() for keyword in ['year', 'id', 'code', '_id', 'год']
-                )]
+                    keyword in col.lower() for keyword in ['id', 'code', '_id', 'record_count']
+                ) and col != config["x_column"]]  # Исключаем выбранную x_column
                 config["y_column"] = value_cols[0] if value_cols else numeric_cols[0] if numeric_cols else None
+                logger.info(f"Line chart: найденные value колонки: {value_cols}, выбрана y_column: {config['y_column']}")
                 
             elif chart_type == "bar":
                 config["x_column"] = text_cols[0] if text_cols else None

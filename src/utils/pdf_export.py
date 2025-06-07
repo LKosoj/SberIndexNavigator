@@ -257,8 +257,12 @@ class PDFReportGenerator:
             # Таблица данных (если есть)
             if data is not None and not data.empty:
                 story.append(Paragraph("Данные:", self.heading_style))
-                table = self._create_data_table(data)
-                story.append(table)
+                table_result = self._create_data_table(data)
+                # Обрабатываем случай когда _create_data_table возвращает список элементов
+                if isinstance(table_result, list):
+                    story.extend(table_result)
+                else:
+                    story.append(table_result)
                 story.append(Spacer(1, 15))
             
             # Результаты анализа (если есть)
@@ -647,8 +651,12 @@ def generate_full_history_pdf(qa_pairs: List[Dict[str, Any]]) -> bytes:
             # Таблица данных (если есть)
             if pair['data'] is not None and not pair['data'].empty:
                 story.append(Paragraph("Данные:", generator.heading_style))
-                table = generator._create_data_table(pair['data'])
-                story.append(table)
+                table_result = generator._create_data_table(pair['data'])
+                # Обрабатываем случай когда _create_data_table возвращает список элементов
+                if isinstance(table_result, list):
+                    story.extend(table_result)
+                else:
+                    story.append(table_result)
                 story.append(Spacer(1, 15))
             
             # Визуализация (если есть)

@@ -71,14 +71,12 @@ class MapCreator:
             value_col = config.get("value_column")
             title = config.get("title", "Географическое распределение")
             
-            if not self.geo_data:
-                return self._create_simple_scatter_map(config)
-            
-            # Создаем DataFrame с координатами
+            # Создаем DataFrame с координатами (теперь работает и без GeoJSON)
             geo_df = self._prepare_geo_dataframe(df, location_col, value_col)
             
             if geo_df.empty:
-                raise ValueError("Не удалось сопоставить данные с координатами")
+                logger.warning("Не удалось найти координаты, используем fallback карту")
+                return self._create_simple_scatter_map(config)
             
             fig = px.scatter_mapbox(
                 geo_df,
@@ -209,7 +207,25 @@ class MapCreator:
             DataFrame с координатами
         """
         try:
+            # Сначала проверяем есть ли координаты в самих данных
+            lat_cols = [col for col in df.columns if 'lat' in col.lower() or 'широта' in col.lower()]
+            lon_cols = [col for col in df.columns if 'lon' in col.lower() or 'долгота' in col.lower()]
+            
+            if lat_cols and lon_cols:
+                # Координаты есть в данных - используем их
+                logger.info(f"Найдены координаты в данных: lat={lat_cols[0]}, lon={lon_cols[0]}")
+                geo_df = df.copy()
+                geo_df['lat'] = pd.to_numeric(geo_df[lat_cols[0]], errors='coerce')
+                geo_df['lon'] = pd.to_numeric(geo_df[lon_cols[0]], errors='coerce')
+                
+                # Удаляем записи без координат
+                geo_df = geo_df.dropna(subset=['lat', 'lon'])
+                logger.info(f"Подготовлен DataFrame с координатами: {len(geo_df)} записей")
+                return geo_df
+            
+            # Fallback: пытаемся использовать GeoJSON если есть
             if not self.geo_data:
+                logger.warning("Нет ни координат в данных, ни GeoJSON файла")
                 return pd.DataFrame()
             
             # Создаем словарь координат из GeoJSON
