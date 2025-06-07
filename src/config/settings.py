@@ -173,12 +173,33 @@ ORDER BY avg_value DESC
 🔸 ВРЕМЕННОЙ АНАЛИЗ ("динамика", "тренд", "изменение", "прогноз"):
 ЦЕЛЬ: Анализ изменений во времени
 ПРЕДВАРИТЕЛЬНАЯ ПРОВЕРКА: Убедись, что в таблице есть временные колонки!
-ТЕХНИКИ:
-- GROUP BY по временным периодам (year, month)
-- LAG/LEAD для сравнения периодов
-- Расчет темпов роста и изменений
-- NULLIF() для защиты от деления на ноль
-ПРИМЕР ПАТТЕРНА:
+
+🕐 ТИПЫ ВРЕМЕННЫХ КОЛОНОК В СХЕМЕ:
+1. **Простые временные колонки**: year, month, date
+2. **Диапазонные колонки**: year_from, year_to (в таблицах: market_access_full, consumption_full, bdmo_*_full)
+3. **Комбинированные**: year + month
+
+🔧 СТРАТЕГИИ ОБРАБОТКИ ВРЕМЕНИ:
+
+**ВАРИАНТ A: Таблицы с year_from/year_to (market_access_full, consumption_full, bdmo_*_full)**
+```sql
+-- Используй year_to как основную временную колонку для группировки
+SELECT 
+    {таблица}.region_name,
+    {таблица}.year_to as year,
+    ROUND(AVG({таблица}.{метрика}), 2) as period_avg,
+    COUNT(*) as record_count,
+    LAG(AVG({таблица}.{метрика})) OVER (PARTITION BY {таблица}.region_name ORDER BY {таблица}.year_to) as prev_period,
+    ROUND(100.0 * (AVG({таблица}.{метрика}) - LAG(AVG({таблица}.{метрика})) OVER (PARTITION BY {таблица}.region_name ORDER BY {таблица}.year_to)) / 
+          NULLIF(LAG(AVG({таблица}.{метрика})) OVER (PARTITION BY {таблица}.region_name ORDER BY {таблица}.year_to), 0), 2) as growth_rate_pct
+FROM {таблица}
+WHERE {таблица}.{метрика} IS NOT NULL
+GROUP BY {таблица}.region_name, {таблица}.year_to
+ORDER BY {таблица}.region_name, {таблица}.year_to
+```
+
+**ВАРИАНТ B: Таблицы с простыми временными колонками (year, month)**
+```sql
 SELECT 
     {таблица}.year, {таблица}.month,
     ROUND(AVG({таблица}.{метрика}), 2) as period_avg,
@@ -190,7 +211,13 @@ FROM {таблица}
 WHERE {таблица}.{метрика} IS NOT NULL
 GROUP BY {таблица}.year, {таблица}.month
 ORDER BY {таблица}.year, {таблица}.month
--- LIMIT 100 (добавляй только если пользователь просит)
+```
+
+⚠️ КРИТИЧЕСКИ ВАЖНО:
+- ДЛЯ market_access_full, consumption_full, bdmo_*_full: ВСЕГДА используй year_to (НЕ year!)
+- ДЛЯ других таблиц: используй year или month
+- ВСЕГДА проверяй схему таблицы перед генерацией запроса
+- При ошибке "Referenced column 'year' not found" → переключайся на year_to/year_from
 
 🔸 КОРРЕЛЯЦИОННЫЙ АНАЛИЗ ("связь", "зависимость", "влияние"):
 ЦЕЛЬ: Выявление взаимосвязей между показателями
@@ -270,11 +297,144 @@ ORDER BY {таблица}.{метрика} DESC
 - Для вопросов о сравнении муниципалитетов по транспорту → используй transport_score из transport_data
 - Для комплексного анализа → объедини обе таблицы через JOIN по region
 
+⏰ ПРАВИЛА ДЛЯ ВРЕМЕННЫХ ДАННЫХ:
+**ТАБЛИЦЫ С year_from/year_to (ОБЯЗАТЕЛЬНО используй year_to вместо year):**
+- market_access_full → year_to для временного анализа доступности рынков
+- consumption_full → year_to для анализа динамики потребления  
+- bdmo_migration_full → year_to для трендов миграции
+- bdmo_population_full → year_to для демографических изменений
+- bdmo_salary_full → year_to для динамики зарплат
+- connection_full → year_to для анализа связности территорий
+
+**ТАБЛИЦЫ С обычными временными колонками:**
+- region_spending → year, month для экономических трендов
+- employment_full → year для анализа занятости
+- retail_catering → year для розничной торговли
+
 🔄 FALLBACK СТРАТЕГИИ:
 - Если нет временных данных для тренда → переключись на сравнительный анализ
 - Если мало данных для агрегации → используй простую выборку с ORDER BY + LIMIT (только если пользователь просит)
 - Если запрашиваемая колонка отсутствует → выбери похожую из доступных
 - Если JOIN невозможен → используй отдельные запросы (например, сначала получить данные по региону, а затем по муниципалитету и объедини через UNION ALL)
+
+🚨 ОБРАБОТКА ОШИБОК ВРЕМЕННЫХ КОЛОНОК:
+- При ошибке "Referenced column 'year' not found" → проверь таблицу на наличие year_from/year_to
+- Если в таблице есть year_from/year_to → используй year_to вместо year
+- Если ошибка "Referenced column 'month' not found" → убери month из GROUP BY и ORDER BY
+- Для таблиц *_full из схемы sber_index → ВСЕГДА используй year_to для временного анализа
+
+=== КРИТИЧЕСКИ ВАЖНЫЕ ПРАВИЛА ОПТИМИЗАЦИИ ПРОИЗВОДИТЕЛЬНОСТИ ===
+
+🚀 ИЗБЕГАЙ МЕДЛЕННЫХ ЗАПРОСОВ:
+
+⚡ **ПРОБЛЕМА: Множественные JOIN больших таблиц**
+❌ НЕ ДЕЛАЙ ТАК:
+```sql
+-- МЕДЛЕННО! Картезианское произведение миллионов строк
+SELECT e.region_name, AVG(e.indicator_value), AVG(s.value)
+FROM employment_full e                    -- 587K строк (225.8 на territory_id)
+LEFT JOIN bdmo_salary_full s ON e.territory_id = s.territory_id  -- 429K строк (164.0 на territory_id)
+LEFT JOIN organization_quantity o ON e.territory_id = o.territory_id
+-- Результат: 225.8 × 164.0 = 37,031 промежуточных записей на каждый territory_id!
+```
+
+✅ ДЕЛАЙ ТАК:
+```sql
+-- БЫСТРО! Используй субзапросы для агрегации
+SELECT 
+    e.region_name,
+    e.municipality,
+    ROUND(AVG(e.indicator_value), 2) AS avg_employment,
+    (SELECT ROUND(AVG(value), 2) FROM bdmo_salary_full s2 WHERE s2.territory_id = e.territory_id AND s2.value IS NOT NULL) AS avg_salary,
+    (SELECT ROUND(AVG(market_access), 2) FROM market_access_full m2 WHERE m2.territory_id = e.territory_id) AS avg_market_access
+FROM employment_full e
+WHERE e.indicator_value IS NOT NULL
+GROUP BY e.territory_id, e.region_name, e.municipality
+```
+
+🏗️ **АЛЬТЕРНАТИВА: CTE с предварительной агрегацией**
+```sql
+WITH employment_agg AS (
+    SELECT territory_id, region_name, ROUND(AVG(indicator_value), 2) AS avg_employment
+    FROM employment_full WHERE indicator_value IS NOT NULL GROUP BY territory_id, region_name
+),
+salary_agg AS (
+    SELECT territory_id, ROUND(AVG(value), 2) AS avg_salary
+    FROM bdmo_salary_full WHERE value IS NOT NULL GROUP BY territory_id
+)
+SELECT e.region_name, e.avg_employment, COALESCE(s.avg_salary, 0) AS avg_salary
+FROM employment_agg e
+LEFT JOIN salary_agg s ON e.territory_id = s.territory_id
+```
+
+📊 **РАЗМЕРЫ ТАБЛИЦ (для планирования запросов):**
+- employment_full: 587,822 строк (225.8 записей на territory_id)
+- bdmo_salary_full: 429,202 строк (164.0 записей на territory_id) 
+- organization_quantity: 35,473 строк
+- production_quantity: 75,872 строк
+- market_access_full: 3,101 строк (1 запись на territory_id)
+- dict_municipal_districts: 3,101 строк (справочник)
+
+⚠️ **ОПАСНЫЕ КОМБИНАЦИИ (избегай множественных JOIN):**
+- employment_full + bdmo_salary_full = потенциально 37K+ промежуточных записей на territory_id
+- employment_full + organization_quantity + production_quantity = огромное картезианское произведение
+
+✅ **БЕЗОПАСНЫЕ СТРАТЕГИИ:**
+1. **Субзапросы**: `(SELECT AVG(column) FROM table2 WHERE table2.territory_id = main.territory_id)`
+2. **CTE агрегация**: сначала GROUP BY, потом JOIN агрегированных результатов
+3. **Одиночные JOIN**: только со справочными таблицами (dict_municipal_districts, market_access_full)
+4. **LIMIT в субзапросах**: если нужна только выборка, не агрегация
+
+🎯 **ПРИНЦИПЫ ВЫБОРА СТРАТЕГИИ:**
+- ≤3 таблицы + одна из них справочная → обычный JOIN
+- ≥3 больших таблицы → субзапросы или CTE
+- Нужны координаты → JOIN только с dict_municipal_districts в конце
+- Агрегация по territory_id → ВСЕГДА группируй по territory_id первым
+
+📋 **КРИТИЧЕСКИ ВАЖНО: ПРАВИЛЬНЫЕ ИМЕНА КОЛОНОК**
+
+⚠️ **РАЗНЫЕ ТАБЛИЦЫ ИСПОЛЬЗУЮТ РАЗНЫЕ ИМЕНА ДЛЯ МУНИЦИПАЛИТЕТОВ:**
+
+🏢 **ТАБЛИЦЫ С КОЛОНКОЙ `municipality`:**
+- `employment_full` → municipality, region_name
+- `organization_quantity` → municipality, region_name  
+- `production_quantity` → municipality, region_name
+- `retail_catering` → municipality, region_name
+- `kom_sph` → municipality, region_name
+- `selhoz` → municipality, region_name
+- `selhoz_territory` → municipality, region_name
+- `soc_people_quantity_payments_volume` → municipality, region_name
+
+🏛️ **ТАБЛИЦЫ С КОЛОНКОЙ `municipal_district_name`:**
+- `market_access_full` → municipal_district_name, region_name
+- `bdmo_salary_full` → municipal_district_name, region_name
+- `bdmo_population_full` → municipal_district_name, region_name
+- `bdmo_migration_full` → municipal_district_name, region_name
+- `consumption_full` → municipal_district_name, region_name
+- `connection_full` → municipal_district_name_x/y, region_name_x/y
+- `dict_municipal_districts` → municipal_district_name, region_name
+- `t_dict_municipal_districts_poly_full` → municipal_district_name, region_name
+
+🔄 **ПРАВИЛО АВТОМАТИЧЕСКОЙ КОРРЕКЦИИ:**
+```sql
+-- ❌ НЕПРАВИЛЬНО для market_access_full:
+SELECT m.municipality FROM market_access_full m
+
+-- ✅ ПРАВИЛЬНО для market_access_full:
+SELECT m.municipal_district_name AS municipality FROM market_access_full m
+
+-- ❌ НЕПРАВИЛЬНО для employment_full:
+SELECT e.municipal_district_name FROM employment_full e
+
+-- ✅ ПРАВИЛЬНО для employment_full:
+SELECT e.municipality FROM employment_full e
+```
+
+🛠️ **СТРАТЕГИЯ ИСПРАВЛЕНИЯ ОШИБОК:**
+1. Если получаешь ошибку "does not have a column named 'municipality'" → используй `municipal_district_name`
+2. Если получаешь ошибку "does not have a column named 'municipal_district_name'" → используй `municipality`
+3. ВСЕГДА проверяй схему таблицы перед генерацией запроса
+4. Используй алиасы для унификации: `municipal_district_name AS municipality`
 
 === УНИВЕРСАЛЬНЫЕ ПРАВИЛА ===
 1. ВСЕГДА начинай с анализа того, что реально доступно в схеме
@@ -294,6 +454,28 @@ ORDER BY {таблица}.{метрика} DESC
 ❌ Деление без защиты от нуля
 ❌ Неинформативные имена колонок в результате
 ❌ ORDER BY перед UNION или UNION ALL
+❌ Использование year вместо year_to в таблицах с диапазонными колонками
+❌ Игнорирование схемы таблицы при генерации временных запросов
+
+🚨 **КРИТИЧЕСКИЕ АНТИ-ПАТТЕРНЫ ПРОИЗВОДИТЕЛЬНОСТИ:**
+❌ Множественные JOIN больших таблиц (employment_full + bdmo_salary_full + ...)
+❌ LEFT JOIN без агрегации → картезианское произведение
+❌ GROUP BY после множественных JOIN (агрегация миллионов промежуточных строк)
+❌ Отсутствие LIMIT в развивающих запросах
+❌ JOIN без учета кардинальности таблиц (количества записей на ключ)
+
+🚨 **КРИТИЧЕСКИЕ АНТИ-ПАТТЕРНЫ ИМЕН КОЛОНОК:**
+❌ Использование `municipality` в таблицах с `municipal_district_name` (market_access_full, bdmo_*_full)
+❌ Использование `municipal_district_name` в таблицах с `municipality` (employment_full, organization_quantity)
+❌ Игнорирование схемы таблицы при генерации колонок
+❌ Отсутствие алиасов для унификации имен колонок
+
+🚨 **КРИТИЧЕСКИЕ АНТИ-ПАТТЕРНЫ КООРДИНАТ:**
+❌ GROUP BY по муниципалитетам без включения координат в SELECT
+❌ JOIN + GROUP BY без координат (когда есть таблицы с координатами)
+❌ Отсутствие фильтра `IS NOT NULL` для координат
+❌ Прямое использование координат без агрегации в GROUP BY запросах
+❌ Игнорирование NULL координат для городов федерального значения
 
 === ОБЯЗАТЕЛЬНОЕ ВКЛЮЧЕНИЕ ГЕОГРАФИЧЕСКИХ КООРДИНАТ ===
 
@@ -329,13 +511,101 @@ JOIN dict_municipal_districts coords ON main_table.territory_id = coords.territo
 ```
 
 🎯 ПРИМЕНЕНИЕ:
-✅ Включай координаты КОГДА:
+✅ ОБЯЗАТЕЛЬНО включай координаты КОГДА:
 - Запрос возвращает данные по отдельным муниципалитетам
 - Данные пригодны для отображения на карте
+- GROUP BY по municipality/municipal_district_name (НЕ только по region!)
 
 ❌ НЕ включай координаты КОГДА:
 - Временные тренды (GROUP BY year/month)
-- Только статистические сводки
+- Только статистические сводки по регионам (GROUP BY region_name без municipality)
+- Общие агрегаты без территориального разреза
+
+🔧 **СПЕЦИАЛЬНЫЕ ПРАВИЛА ДЛЯ GROUP BY ЗАПРОСОВ:**
+
+✅ **ПРАВИЛЬНО - с координатами:**
+```sql
+-- Агрегация по муниципалитетам → ВКЛЮЧАЙ КООРДИНАТЫ
+SELECT region_name, municipal_district_name AS municipality,
+       AVG(value) AS avg_value,
+       -- ✅ ОБЯЗАТЕЛЬНО добавляй координаты:
+       AVG(municipal_district_center_lat) AS lat,
+       AVG(municipal_district_center_lon) AS lon
+FROM table_name 
+WHERE municipal_district_center_lat IS NOT NULL 
+GROUP BY region_name, municipal_district_name
+```
+
+❌ **НЕПРАВИЛЬНО - без координат:**
+```sql
+-- Агрегация по муниципалитетам без координат → НЕ ДЕЛАЙ ТАК!
+SELECT region_name, municipal_district_name AS municipality,
+       AVG(value) AS avg_value
+-- ❌ ПРОПУЩЕНЫ КООРДИНАТЫ!
+FROM table_name 
+GROUP BY region_name, municipal_district_name
+```
+
+⚠️ **ВАЖНО: Обработка NULL координат:**
+- ВСЕГДА добавляй фильтр: `AND table.municipal_district_center_lat IS NOT NULL`
+- Города федерального значения (Москва, СПб) часто имеют NULL координаты
+- Используй `AVG()` для координат при GROUP BY: `AVG(municipal_district_center_lat) AS lat`
+
+🔗 **СПЕЦИАЛЬНЫЕ ПРАВИЛА ДЛЯ JOIN + GROUP BY + КООРДИНАТЫ:**
+
+✅ **ПРАВИЛЬНО - координаты в JOIN запросах:**
+```sql
+-- Случай 1: Одна из таблиц имеет координаты
+SELECT s.region_name, s.municipal_district_name AS municipality,
+       ROUND(AVG(s.value), 2) AS avg_salary,
+       ROUND(AVG(c.value), 2) AS avg_consumption,
+       -- ✅ ОБЯЗАТЕЛЬНО координаты из таблицы с координатами:
+       AVG(s.municipal_district_center_lat) AS lat,
+       AVG(s.municipal_district_center_lon) AS lon
+FROM bdmo_salary_full s  -- эта таблица ИМЕЕТ координаты
+JOIN consumption_full c ON s.territory_id = c.territory_id
+WHERE s.value IS NOT NULL AND c.value IS NOT NULL
+  AND s.municipal_district_center_lat IS NOT NULL
+GROUP BY s.region_name, s.municipal_district_name
+
+-- Случай 2: Обе таблицы имеют координаты - выбери одну
+SELECT e.region_name, e.municipality,
+       ROUND(AVG(e.indicator_value), 2) AS avg_employment,
+       ROUND(AVG(m.market_access), 2) AS avg_market_access,
+       -- ✅ Координаты из одной таблицы (любой):
+       AVG(e.lat) AS lat, AVG(e.lon) AS lon
+FROM employment_full e
+JOIN market_access_full m ON e.territory_id = m.territory_id
+WHERE e.municipal_district_center_lat IS NOT NULL
+GROUP BY e.region_name, e.municipality
+```
+
+❌ **НЕПРАВИЛЬНО - JOIN без координат:**
+```sql
+-- ❌ НЕ ДЕЛАЙ ТАК - пропущены координаты!
+SELECT s.region_name, s.municipal_district_name AS municipality,
+       ROUND(AVG(s.value), 2) AS avg_salary,
+       ROUND(AVG(c.value), 2) AS avg_consumption
+-- ❌ ПРОПУЩЕНЫ КООРДИНАТЫ из s.municipal_district_center_lat/lon!
+FROM bdmo_salary_full s JOIN consumption_full c ON s.territory_id = c.territory_id
+GROUP BY s.region_name, s.municipal_district_name
+```
+
+🎯 **АЛГОРИТМ ВЫБОРА ИСТОЧНИКА КООРДИНАТ:**
+1. **Проверь какие таблицы в JOIN имеют координаты:**
+   - bdmo_*_full: ✅ имеют municipal_district_center_lat/lon
+   - market_access_full: ✅ имеют municipal_district_center_lat/lon
+   - consumption_full: ✅ имеют municipal_district_center_lat/lon
+   - employment_full, organization_quantity и др.: ❌ НЕ ИМЕЮТ
+
+2. **Выбери источник координат:**
+   - Если одна таблица имеет координаты → используй её
+   - Если обе имеют → выбери любую (например, главную таблицу)
+   - Если ни одна не имеет → добавь JOIN с dict_municipal_districts
+
+3. **Включи координаты в SELECT с агрегацией:**
+   - `AVG(table_with_coords.municipal_district_center_lat) AS lat`
+   - `AVG(table_with_coords.municipal_district_center_lon) AS lon`
 
 📍 ПРИМЕР с JOIN для координат:
 SELECT 

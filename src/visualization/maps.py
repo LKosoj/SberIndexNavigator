@@ -78,11 +78,26 @@ class MapCreator:
                 logger.warning("Не удалось найти координаты, используем fallback карту")
                 return self._create_simple_scatter_map(config)
             
+            # Обрабатываем NaN значения для размера точек
+            size_data = None
+            if value_col and value_col in geo_df.columns:
+                # Заменяем NaN на минимальное значение или на 5 если все NaN
+                size_series = pd.to_numeric(geo_df[value_col], errors='coerce')
+                if not size_series.isna().all():
+                    # Есть валидные значения - заменяем NaN на минимальное
+                    min_val = size_series.min()
+                    size_data = size_series.fillna(min_val)
+                    logger.info(f"Заполнены NaN значения в size колонке минимальным значением: {min_val}")
+                else:
+                    # Все значения NaN - используем константу
+                    size_data = 5
+                    logger.warning("Все значения size колонки NaN, используем постоянный размер")
+            
             fig = px.scatter_mapbox(
                 geo_df,
                 lat="lat",
                 lon="lon",
-                size=value_col if value_col else None,
+                size=size_data,
                 color=value_col if value_col else location_col,
                 hover_name=location_col,
                 hover_data={col: True for col in geo_df.columns if col not in ['lat', 'lon']},
@@ -151,13 +166,42 @@ class MapCreator:
             
             # Нормализуем размеры пузырьков
             if value_col and value_col in geo_df.columns:
-                max_val = geo_df[value_col].max()
-                min_val = geo_df[value_col].min()
-                geo_df['bubble_size'] = 10 + (geo_df[value_col] - min_val) / (max_val - min_val) * 40
+                # Обрабатываем NaN значения
+                value_series = pd.to_numeric(geo_df[value_col], errors='coerce')
+                valid_values = value_series.dropna()
+                
+                if not valid_values.empty:
+                    max_val = valid_values.max()
+                    min_val = valid_values.min()
+                    
+                    # Для валидных значений нормализуем, для NaN используем минимальный размер
+                    normalized = 10 + (value_series - min_val) / (max_val - min_val) * 40
+                    geo_df['bubble_size'] = normalized.fillna(10)  # 10 - минимальный размер
+                    logger.info(f"Нормализованы размеры пузырьков: {min_val} - {max_val}")
+                else:
+                    geo_df['bubble_size'] = 20
+                    logger.warning("Все значения NaN, используем постоянный размер пузырьков")
             else:
                 geo_df['bubble_size'] = 20
             
             fig = go.Figure()
+            
+            # Подготавливаем цвет для пузырьков
+            if color_col and color_col in geo_df.columns:
+                color_data = pd.to_numeric(geo_df[color_col], errors='coerce')
+                # Заменяем NaN на среднее значение или 0
+                if not color_data.isna().all():
+                    color_data = color_data.fillna(color_data.mean())
+                else:
+                    color_data = 0
+            elif value_col and value_col in geo_df.columns:
+                color_data = pd.to_numeric(geo_df[value_col], errors='coerce')
+                if not color_data.isna().all():
+                    color_data = color_data.fillna(color_data.mean())
+                else:
+                    color_data = 0
+            else:
+                color_data = 'blue'
             
             # Добавляем пузырьки
             fig.add_trace(go.Scattermapbox(
@@ -166,7 +210,7 @@ class MapCreator:
                 mode='markers',
                 marker=dict(
                     size=geo_df['bubble_size'],
-                    color=geo_df[color_col] if color_col and color_col in geo_df.columns else geo_df[value_col] if value_col else 'blue',
+                    color=color_data,
                     colorscale='Viridis',
                     showscale=True,
                     sizemode='diameter'
