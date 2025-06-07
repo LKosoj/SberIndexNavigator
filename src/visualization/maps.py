@@ -79,28 +79,30 @@ class MapCreator:
                 return self._create_simple_scatter_map(config)
             
             # Обрабатываем NaN значения для размера точек
-            size_data = None
+            size_column = None
             if value_col and value_col in geo_df.columns:
                 # Заменяем NaN на минимальное значение или на 5 если все NaN
                 size_series = pd.to_numeric(geo_df[value_col], errors='coerce')
                 if not size_series.isna().all():
                     # Есть валидные значения - заменяем NaN на минимальное
                     min_val = size_series.min()
-                    size_data = size_series.fillna(min_val)
+                    geo_df['_size_processed'] = size_series.fillna(min_val)
+                    size_column = '_size_processed'
                     logger.info(f"Заполнены NaN значения в size колонке минимальным значением: {min_val}")
                 else:
-                    # Все значения NaN - используем константу
-                    size_data = 5
+                    # Все значения NaN - создаем колонку с константой
+                    geo_df['_size_processed'] = 5
+                    size_column = '_size_processed'
                     logger.warning("Все значения size колонки NaN, используем постоянный размер")
             
             fig = px.scatter_mapbox(
                 geo_df,
                 lat="lat",
                 lon="lon",
-                size=size_data,
+                size=size_column,
                 color=value_col if value_col else location_col,
                 hover_name=location_col,
-                hover_data={col: True for col in geo_df.columns if col not in ['lat', 'lon']},
+                hover_data={col: True for col in geo_df.columns if col not in ['lat', 'lon', '_size_processed']},
                 title=title,
                 mapbox_style="open-street-map",
                 zoom=MAP_DEFAULT_ZOOM,
