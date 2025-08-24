@@ -198,3 +198,4 @@ cython_debug/
 ck.md
 .DS_Store
 CHANGELOG.md
+data/sber_index_prod.db
